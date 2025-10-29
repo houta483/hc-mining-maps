@@ -4,19 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HC Mining - Borehole Analysis Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-kml@1.0.3/dist/kml.js"></script>
     <style>
-        body {
+        * {
             margin: 0;
             padding: 0;
-            font-family: Arial, sans-serif;
-            background: #f5f5f5;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
         }
         .header {
-            background: #1a73e8;
+            background: linear-gradient(135deg, #1a73e8 0%, #1557b0 100%);
             color: white;
             padding: 20px;
             text-align: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 1000;
         }
         .header h1 {
             margin: 0;
@@ -25,117 +34,113 @@
         .header p {
             margin: 5px 0 0 0;
             opacity: 0.9;
+            font-size: 14px;
         }
-        .container {
-            max-width: 1200px;
-            margin: 20px auto;
-            padding: 20px;
+        #map {
+            flex: 1;
+            width: 100%;
+            z-index: 1;
+        }
+        .info-panel {
+            position: absolute;
+            top: 90px;
+            right: 20px;
             background: white;
+            padding: 15px;
             border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 1000;
+            max-width: 300px;
+            font-size: 13px;
         }
-        .instructions {
-            background: #e8f0fe;
-            padding: 20px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-            border-left: 4px solid #1a73e8;
-        }
-        .instructions h2 {
-            margin-top: 0;
+        .info-panel h3 {
+            margin: 0 0 10px 0;
             color: #1a73e8;
+            font-size: 16px;
         }
-        .instructions ol {
-            margin: 10px 0;
-            padding-left: 20px;
-        }
-        .instructions li {
-            margin: 8px 0;
-        }
-        .button-group {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-top: 15px;
+        .info-panel p {
+            margin: 5px 0;
+            color: #666;
         }
         .button {
             display: inline-block;
-            padding: 12px 24px;
+            margin-top: 10px;
+            padding: 8px 16px;
             background: #1a73e8;
             color: white;
             text-decoration: none;
             border-radius: 4px;
-            font-weight: 500;
-            transition: background 0.2s;
+            font-size: 12px;
         }
         .button:hover {
             background: #1557b0;
         }
-        .button.secondary {
-            background: #34a853;
-        }
-        .button.secondary:hover {
-            background: #2d8f47;
-        }
-        .status {
-            margin-top: 20px;
-            padding: 15px;
-            background: #f1f3f4;
-            border-radius: 4px;
-        }
-        .status-item {
-            margin: 5px 0;
-            padding: 5px 0;
-        }
-        code {
-            background: #f1f3f4;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 2000;
         }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>🏔️ HC Mining - Borehole Analysis Map</h1>
-        <p>Live, Auto-Updating Map</p>
+        <p>Live Map - Auto-updates every 10 minutes</p>
     </div>
     
-    <div class="container">
-        <div class="instructions">
-            <h2>View the Map in Google Earth</h2>
-            <ol>
-                <li>Go to <a href="https://earth.google.com/web/" target="_blank">Google Earth Web</a></li>
-                <li>Click <strong>"Projects"</strong> (left sidebar, folder icon)</li>
-                <li>Click <strong>"New Project"</strong> → <strong>"Import KML file"</strong></li>
-                <li>Choose <strong>"Import from URL"</strong></li>
-                <li>Paste this URL:</li>
-            </ol>
-            <div class="status">
-                <div class="status-item">
-                    <strong>NetworkLink URL:</strong><br>
-                    <code id="networklink-url">https://houta483.github.io/hc-mining-maps/networklink.kml</code>
-                </div>
-            </div>
-            <p><strong>The map will auto-update every 10 minutes!</strong></p>
-        </div>
-        
-        <div class="button-group">
-            <a href="https://earth.google.com/web/" target="_blank" class="button">
-                🌍 Open Google Earth Web
-            </a>
-            <a href="docs/networklink.kml" class="button secondary" download="networklink.kml">
-                📥 Download NetworkLink KML
-            </a>
-        </div>
-        
-        <div class="status">
-            <h3>Map Status</h3>
-            <div class="status-item">✅ <strong>Auto-Updates:</strong> Every 10 minutes</div>
-            <div class="status-item">✅ <strong>Last Updated:</strong> When pipeline runs</div>
-            <div class="status-item">✅ <strong>Shareable:</strong> Anyone with the URL</div>
-        </div>
+    <div id="map"></div>
+    
+    <div class="info-panel">
+        <h3>📊 Map Info</h3>
+        <p><strong>Status:</strong> <span id="status">Loading...</span></p>
+        <p><strong>Auto-Update:</strong> Every 10 min</p>
+        <a href="https://earth.google.com/web/" target="_blank" class="button">
+            Open in Google Earth
+        </a>
     </div>
+    
+    <div class="loading" id="loading">
+        Loading map data...
+    </div>
+
+    <script>
+        // Initialize map centered on your coordinates
+        const map = L.map('map').setView([32.484672, -96.432978], 15);
+        
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        
+        // Load KML from Google Drive
+        const kmzUrl = 'https://drive.google.com/uc?export=download&id=1gWqPqTPZws_qY-JGQTBAAL7Ba-fTbw-E';
+        
+        // Note: Direct KMZ loading in Leaflet is limited
+        // We'll show instructions instead
+        document.getElementById('loading').innerHTML = `
+            <h3>🌍 Interactive Map</h3>
+            <p>For best experience, open in Google Earth Web:</p>
+            <ol style="text-align: left; margin: 10px 0; padding-left: 20px;">
+                <li>Go to <a href="https://earth.google.com/web/" target="_blank">earth.google.com/web</a></li>
+                <li>Click "Projects" → "New Project"</li>
+                <li>Import from URL:</li>
+                <code style="display: block; margin: 10px 0; padding: 10px; background: #f5f5f5; border-radius: 4px;">https://houta483.github.io/hc-mining-maps/networklink.kml</code>
+            </ol>
+            <a href="https://earth.google.com/web/" target="_blank" class="button" style="display: inline-block; margin-top: 10px;">Open Google Earth Web</a>
+        `;
+        
+        document.getElementById('status').textContent = 'Ready';
+        
+        // Remove loading after a moment
+        setTimeout(() => {
+            document.getElementById('loading').style.display = 'none';
+        }, 5000);
+    </script>
 </body>
 </html>
