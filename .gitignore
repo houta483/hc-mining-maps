@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Logs
+logs/
+*.log
+*.log.*
+pipeline.log.old
+
+# Output
+output/
+*.kmz
+*.kml
+
+# Secrets - Protect ALL files in secrets directory
+secrets/*
+# But allow .gitkeep if needed to maintain directory structure
+!secrets/.gitkeep
+# Example files are allowed (for documentation)
+!secrets/*.example
+
+# Database
+*.db
+*.sqlite
+
+# Node/React
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+.terraform/
+*.tfstate
+*.tfstate.backup

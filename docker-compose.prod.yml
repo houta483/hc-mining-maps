@@ -1,0 +1,103 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: borehole_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-borehole_db}
+      MYSQL_USER: ${MYSQL_USER:-borehole_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ${ECR_REGISTRY}/borehole-backend:${IMAGE_TAG:-latest}
+    container_name: borehole_backend
+    command: ["python3", "-m", "src.api.app"]
+    volumes:
+      - ./output:/app/output:ro
+      - ./logs:/app/logs
+      - ./scripts:/app/scripts:ro
+    ports:
+      - "5000:5000"
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=${MYSQL_USER:-borehole_user}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-borehole_db}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - API_PORT=5000
+      - API_HOST=0.0.0.0
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  pipeline:
+    image: ${ECR_REGISTRY}/borehole-pipeline:${IMAGE_TAG:-latest}
+    container_name: borehole_pipeline
+    command: ["python3", "-m", "src.main", "--continuous"]
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./output:/app/output
+      - ./secrets:/app/secrets:ro
+      - ./test_data:/app/test_data:ro
+    environment:
+      - BOX_CONFIG=/app/secrets/box_config.json
+      - AWS_REGION=${AWS_REGION:-us-east-2}
+      - CONFIG_FILE=/app/config/config.yaml
+      - PYTHONPATH=/app
+      - USE_LOCAL_DATA=${USE_LOCAL_DATA:-false}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+    restart: unless-stopped
+    depends_on:
+      - mysql
+
+  frontend:
+    image: ${ECR_REGISTRY}/borehole-frontend:${IMAGE_TAG:-latest}
+    container_name: borehole_frontend
+    ports:
+      - "3000:80"
+    environment:
+      - MAPBOX_TOKEN=${MAPBOX_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - default
+
+  nginx:
+    image: nginx:alpine
+    container_name: borehole_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - default
+
+volumes:
+  mysql_data:
+
+networks:
+  default:
+    driver: bridge
