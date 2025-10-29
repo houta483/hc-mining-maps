@@ -1,251 +1,377 @@
 # Borehole Analysis Application
 
-End-to-end system for fetching gradation spreadsheets from Box, processing them into KMZ/GeoJSON, and exposing them through a secure web UI. The stack is fully containerised for easy local development and single-server production deployment.
+Modern web application for processing Excel gradation reports from Box and displaying interactive borehole maps with real-time updates.
 
-<div align="center">
+## Features
 
-```
-┌───────────────┐     ┌───────────────┐     ┌────────────┐
-│     Box       │ ───▶│   Pipeline    │────▶│   Outputs   │
-│ (Excel files) │     │  (Scheduled)  │     │ (KMZ/Audit)│
-└───────────────┘     └──────┬────────┘     └────┬───────┘
-                              │                  │
-                              ▼                  │
-                      ┌──────────────┐           │
-                      │   Backend    │ ◀─────────┘
-                      │   (Flask)    │
-                      └──────┬───────┘
-                             │
-                ┌────────────▼────────────┐
-                │   Nginx Reverse Proxy   │
-                └────────────┬────────────┘
-                             │
-                      ┌──────▼──────┐
-                      │  Frontend   │
-                      │  (React)    │
-                      └─────────────┘
-```
+- **React Frontend**: Interactive Mapbox map with login authentication
+- **Flask REST API**: JWT-based authentication and data endpoints
+- **MySQL Database**: Secure user credential storage
+- **Automated Pipeline**: Continuously processes Box data every 10 minutes
+- **Interactive Map**: Real-time borehole visualization with depth intervals and FM values
+- **Multi-Mine Support**: Handles multiple mine areas with separate outputs
+- **Audit Trail**: Generates CSV audit logs for all processed data
+- **Dockerized**: Full Docker Compose setup for easy deployment
 
-</div>
-
-All services are orchestrated via Docker Compose locally and on production EC2.
-
----
-
-## Table of Contents
-
-1. [Repository Structure](#repository-structure)
-2. [Service Overview](#service-overview)
-3. [Local Development](#local-development)
-   - [Prerequisites](#prerequisites)
-   - [Initial Setup](#initial-setup)
-   - [Running the Stack](#running-the-stack)
-   - [Box Integration Locally](#box-integration-locally)
-   - [Useful Commands](#useful-commands)
-4. [Production Deployment](#production-deployment)
-   - [First-Time Setup Checklist](#first-time-setup-checklist)
-   - [Secrets & AWS Prerequisites](#secrets--aws-prerequisites)
-   - [Deploying Updates](#deploying-updates)
-   - [Server Access](#server-access)
-   - [Prod Quick Reference](#prod-quick-reference)
-5. [Operations & Maintenance](#operations--maintenance)
-   - [Command Cheat Sheet](#command-cheat-sheet)
-6. [Security Guidance](#security-guidance)
-7. [Troubleshooting](#troubleshooting)
-
----
-
-## Repository Structure
+## Architecture
 
 ```
-.
-├── config/                 # Pipeline configuration
-│   └── config.yaml
-├── database/
-│   └── init.sql            # MySQL schema
-├── deploy/
-│   └── nginx.conf          # Nginx reverse proxy
-├── frontend/               # React web app
-│   ├── Dockerfile
-│   └── src/...
-├── scripts/
-│   ├── create_admin_user.py
-│   ├── fetch-secrets.sh
-│   ├── deploy-prod.sh
-│   ├── run_initialization.sh
-│   └── ...
-├── src/
-│   ├── api/                # Flask backend
-│   └── main.py             # Pipeline entrypoint
-├── docker-compose.yml      # Local stack
-├── docker-compose.prod.yml # Production stack
-├── README.md               # This document
-└── run.sh                  # Helper for local docker-compose
+┌─────────┐     ┌──────────┐     ┌────────┐     ┌─────────┐
+│  Box    │────▶│ Pipeline │────▶│  KMZ   │────▶│ Backend │
+│         │     │ Service  │     │ Files  │     │   API   │
+└─────────┘     └──────────┘     └────────┘     └─────────┘
+                                                     │
+                     ┌──────────────────────────────┼──────────────┐
+                     │                              │              │
+                ┌────▼────┐                   ┌────▼────┐    ┌────▼────┐
+                │ Frontend│                   │   MySQL │    │  Nginx  │
+                │  React  │                   │ Database│    │  Proxy  │
+                └─────────┘                   └─────────┘    └─────────┘
 ```
 
----
+### Services
 
-## Service Overview
+1. **MySQL Database** (`mysql`)
+   - Stores user credentials (username, hashed password)
+   - Initialized with schema from `database/init.sql`
+   - Persistent volume for data storage
+   - Port: 3306
 
-| Service  | Description | Ports | Notes |
-|----------|-------------|-------|-------|
-| `mysql` | MySQL 8.0 database storing user credentials | 3306 | Data persisted in Docker volume `borehole_analysis_app_mysql_data` |
-| `backend` | Flask API providing authentication & GeoJSON API | Exposed as 5001 (container 5000) | Uses JWT, reads processed KMZ/Audit files |
-| `pipeline` | Background processor downloading from Box and producing KMZ, audit & GeoJSON | n/a | Runs continuously (or once via `--once`) |
-| `frontend` | React SPA bundled by Vite & served by nginx | 3000 (or 80 through proxy) | Uses Mapbox token for map visualisation |
-| `nginx` | Reverse proxy entrypoint | 80 (and 443 in prod compose) | Serves frontend & proxies `/api/*` |
+2. **Backend API** (`backend`)
+   - Flask REST API on port 5000 (exposed as 5001)
+   - JWT-based authentication
+   - Endpoints:
+     - `POST /api/auth/login` - User login
+     - `GET /api/auth/verify` - Verify token
+     - `GET /api/auth/health` - Health check
+     - `GET /api/geojson` - Get borehole data (requires auth)
+     - `GET /api/status` - Pipeline status (requires auth)
 
----
+3. **Pipeline Service** (`pipeline`)
+   - Background service that continuously processes Box data
+   - Runs every 10 minutes by default
+   - Generates KMZ files in `/app/output`
+   - Writes to shared volume accessible by backend
 
-## Local Development
+4. **Frontend** (`frontend`)
+   - React SPA built with Vite
+   - Served by nginx on port 80 (inside container)
+   - Mapbox integration for map visualization
+   - Accessible on port 3000 (development) or 80 (via nginx proxy)
+
+5. **Nginx** (`nginx`)
+   - Reverse proxy on port 80
+   - Serves React frontend at `/`
+   - Proxies API requests to backend at `/api/*`
+
+## Quick Start
 
 ### Prerequisites
 
-- Docker Desktop (or Docker Engine + Compose)  
-- Python 3.11+ (for optional direct script execution)  
-- Node 18+ (only if developing the React app outside Docker)  
-- Mapbox account (free tier) to obtain an access token
+- Docker and Docker Compose
+- Mapbox account (free tier works) - https://account.mapbox.com/access-tokens/
 
-### Initial Setup
+### 1. Configure Environment
 
-1. **Fetch secrets (optional but recommended)**
    ```bash
-   AWS_PROFILE=hcmining-prod AWS_REGION=us-east-2 ./scripts/fetch-secrets.sh
-   cp .env.prod .env  # local override; edit if needed
-   ```
-   If you do not have AWS access yet, manually create a `.env` using `.env.example` as reference.
+# Copy example environment file
+cp .env.example .env
 
-2. **Ensure Box config is present**
-   - Download the authorised Box app config (JSON)  
-   - Place it at `secrets/box_config.json` (kept out of git).
-
-3. **Update pipeline configuration** (`config/config.yaml`)
-   ```yaml
-   parent_folder_id: "<YOUR_BOX_FOLDER_ID>"
-   s3_bucket: "hc-mining-maps"
-   cloudfront_distribution_id: "<CF_DIST_ID>"
-   public_url_template: "https://<cf-domain>/<filename>"
-   ```
-   For local-only testing you can leave S3/CloudFront placeholders; they’re only used when publishing to S3.
-
-4. **Install JS dependencies (optional)**
-   ```bash
-   cd frontend
-   npm install
-   cd ..
-   ```
-
-### Running the Stack
-
-The `run.sh` helper ensures directories exist and uses docker-compose under the hood.
-
-```bash
-./run.sh start    # build & launch all containers (first run will populate MySQL)
-./run.sh stop     # stop containers (retain volumes)
-./run.sh clean    # stop & remove containers + volumes (useful when resetting MySQL)
-./run.sh logs     # follow logs for all services
+# Edit .env and set:
+# - MYSQL_PASSWORD (use a strong password)
+# - JWT_SECRET_KEY (generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+# - MAPBOX_TOKEN (your Mapbox access token)
 ```
 
-**Note on passwords:** the first time MySQL starts it uses the credentials from `.env`. If you later change them, run `./run.sh clean` to rebuild the database volume.
-
-### Creating Users Locally
-
-After the containers are running:
+### 2. Build and Start Services
 
 ```bash
-# create an admin user (username/password)
-docker-compose exec backend python3 /app/scripts/create_admin_user.py asdf asdf
+# Build all services
+docker-compose up --build
+
+# Or use the run script
+./run.sh start
 ```
 
-Visit `http://localhost` and log in with those credentials.
+This starts:
+- **MySQL** on port 3306
+- **Backend API** on port 5001 (5000 inside container)
+- **Frontend** on port 3000
+- **Nginx Proxy** on port 80 (main entry point)
+- **Pipeline** service (background processing)
 
-### Box Integration Locally
+### 3. Create Admin User
 
-1. Ensure `USE_LOCAL_DATA=false` in `.env` (the default after running `fetch-secrets.sh`).
-2. Confirm `secrets/box_config.json` contains the full Box credentials (clientID, clientSecret, enterpriseID & appAuth if using JWT).
-3. Restart the pipeline if needed:
-   ```bash
-   docker-compose restart pipeline
-   docker-compose logs -f pipeline
-   ```
-   You should see logs such as “Authenticated as user …” and file discovery.
-
-### Useful Commands
+In a new terminal, after services are running:
 
 ```bash
-./run.sh status                          # docker-compose ps + last logs
-./run.sh shell                           # open shell into backend container
-USE_LOCAL_DATA=true ./run.sh start       # run pipeline against local test_data
-./run.sh restart                         # quick bounce of all containers
+docker-compose exec backend python3 scripts/create_admin_user.py admin yourpassword
+```
 
-# Run pipeline once (from host)
+### 4. Access Application
+
+Open your browser: **http://localhost:80**
+
+Login with:
+- Username: `admin`
+- Password: (the one you set in step 3)
+
+## Development
+
+### Frontend (React)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Access at: http://localhost:3000
+
+### Backend API
+
+```bash
+# Set environment variables
+export MYSQL_HOST=localhost
+export MYSQL_USER=borehole_user
+export MYSQL_PASSWORD=borehole_password
+export MYSQL_DATABASE=borehole_db
+export JWT_SECRET_KEY=dev-secret-key
+
+# Run API
+python3 -m src.api.app
+```
+
+### Pipeline Service
+
+```bash
+# Run pipeline once
 docker-compose run --rm pipeline python3 -m src.main --once
 
-# Tail specific service logs
-docker-compose logs -f backend
+# Use local test data
+USE_LOCAL_DATA=true docker-compose run --rm pipeline python3 -m src.main --once
 ```
 
----
+## Configuration
+
+### Pipeline Configuration (`config/config.yaml`)
+
+- Mine area settings
+- Box folder IDs (use placeholders in public repos)
+- Output file templates
+- Validation settings
+
+### Box Integration
+
+1. Place `box_config.json` in `secrets/` directory
+2. Configure Box folder IDs in `config/config.yaml`
+3. Set `USE_LOCAL_DATA=false` in `.env` (or keep `true` for local testing)
+
+### Mapbox Token
+
+Get free token at: https://account.mapbox.com/access-tokens/
+
+Set in `.env`:
+```bash
+MAPBOX_TOKEN=pk.your_token_here
+```
+
+## Project Structure
+
+```
+├── frontend/              # React frontend
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Login.jsx
+│   │   │   └── Map.jsx
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   └── Dockerfile
+├── src/
+│   ├── api/              # Backend REST API
+│   │   ├── app.py        # Flask app
+│   │   ├── auth.py       # Authentication endpoints
+│   │   ├── data.py       # Data endpoints
+│   │   ├── database.py   # MySQL connection
+│   │   └── middleware.py # JWT middleware
+│   └── main.py          # Pipeline service
+├── database/
+│   └── init.sql         # MySQL schema
+├── config/              # Pipeline configuration
+│   └── config.yaml
+├── scripts/             # Utility scripts
+│   ├── create_admin_user.py
+│   └── create_stub_data.py
+├── secrets/             # Credentials (NOT committed)
+│   └── box_config.json
+└── docker-compose.yml
+```
+
+## API Endpoints
+
+### Authentication
+- `POST /api/auth/login` - User login
+- `GET /api/auth/verify` - Verify JWT token
+- `GET /api/auth/health` - Health check
+
+### Data (requires authentication)
+- `GET /api/geojson` - Get borehole GeoJSON data
+- `GET /api/status` - Pipeline status
+
+All data endpoints require JWT token in `Authorization: Bearer <token>` header.
+
+## Security
+
+### Sensitive Information
+
+This project contains sensitive information that should **NEVER** be committed to version control:
+
+**Protected Files (.gitignore):**
+- `.env` - Contains all secrets (passwords, tokens, API keys)
+- `secrets/*` - Box API credentials and other secrets (all files ignored)
+- `logs/` - Audit logs with potentially sensitive data
+- `output/` - Generated KMZ files
+
+**Environment Variables (.env):**
+- `JWT_SECRET_KEY` - Used to sign authentication tokens
+- `MYSQL_PASSWORD` - Database password
+- `MYSQL_ROOT_PASSWORD` - MySQL root password
+- `MAPBOX_TOKEN` - Mapbox API token
+- `BOX_AS_USER_ID` - Box service account ID
+- `BOX_CONFIG` - Path to Box API credentials file
+
+**Configuration Files:**
+- `config/config.yaml` - Contains Box folder IDs (business-sensitive)
+  - Use placeholders for public repository
+  - Store actual IDs in local `.env` if needed
+
+### Security Best Practices
+
+1. **Never commit `.env` file** - Always use `.env.example` with placeholders
+2. **Never commit files in `secrets/`** - All files are automatically ignored
+3. **Rotate secrets periodically** - Change passwords and JWT keys in production
+4. **Use strong passwords** - Generate secure random strings for production
+5. **Review before committing** - Check for hardcoded secrets in code
+
+### Before First Commit
+
+```bash
+# Ensure .env is not tracked
+git rm --cached .env
+
+# Verify .env.example has placeholders only
+grep -v "^#" .env.example | grep -E "(password|secret|token)"
+
+# Check for hardcoded secrets
+grep -r "password\|secret\|token" --include="*.py" --include="*.js" --include="*.jsx" src/ frontend/src/
+```
+
+## Troubleshooting
+
+### Services won't start
+```bash
+docker-compose logs
+```
+
+### Can't login
+```bash
+# Check backend logs
+docker-compose logs backend
+
+# Verify database connection
+docker-compose exec mysql mysql -u borehole_user -p borehole_db
+
+# Check if user exists
+docker-compose exec backend python3 -c "from src.api.database import db; db.connect(); print(db.get_user_by_username('admin'))"
+```
+
+### No map data
+```bash
+# Check pipeline logs
+docker-compose logs pipeline
+
+# Verify KMZ generation
+ls -la output/
+
+# Check if pipeline processed data
+docker-compose logs pipeline | grep "KMZ generated"
+```
+
+### Frontend issues
+```bash
+# Check frontend logs
+docker-compose logs frontend
+
+# Rebuild frontend
+docker-compose build frontend && docker-compose up -d frontend
+```
+
+### Port conflicts
+```bash
+# Backend port conflict (default 5000)
+# Already configured to use 5001 externally
+
+# If MySQL port conflicts, change in docker-compose.yml
+# If nginx port conflicts, change "80:80" to "8080:80"
+```
+
+### Mapbox token not working
+```bash
+# Verify token is injected
+docker-compose exec frontend cat /usr/share/nginx/html/index.html | grep MAPBOX_TOKEN
+
+# Rebuild frontend with new token
+docker-compose build frontend && docker-compose up -d frontend
+```
 
 ## Production Deployment
 
-Production uses the same containers orchestrated by `docker-compose.prod.yml` on a single EC2 instance.
+### Server Setup
 
-### First-Time Setup Checklist
+See `deploy/setup_server.sh` for automated server setup including:
+- Docker and Docker Compose installation
+- Directory structure creation
+- Systemd service configuration
 
-1. **Container registry** – `infra/ecr` Terraform (`terraform init && terraform apply`).
-2. **GitHub secrets** – add `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `MAPBOX_TOKEN`.
-3. **AWS Secrets Manager** – create: `prod/borehole/db`, `prod/borehole/jwt`, `prod/borehole/mapbox`, `prod/borehole/box` (see below for payload examples).
-4. **EC2 instance** – Ubuntu 22.04+, t3.small+, security group allowing 22/80/443.
-5. **Install Docker & awscli on server** – run `scripts/setup-server.sh` or equivalent.
-6. **Ensure IAM role or AWS credentials** with access to ECR + Secrets Manager.
-7. **Push code to master** – wait for GitHub Actions to build & push images (`frontend`, `backend`, `pipeline`).
+### Environment Variables
 
-### Secrets & AWS Prerequisites
+For production, set these securely:
+- Use environment variables or secret management services
+- Never hardcode secrets in source code
+- Use different secrets for production vs development
+- Enable HTTPS/TLS for all connections
 
-Create Secrets Manager entries (JSON shown below). All values are strings.
+### Database
 
-- `prod/borehole/db`
-  ```json
-  {
-    "host": "mysql",
-    "port": "3306",
-    "database": "borehole_db",
-    "username": "borehole_user",
-    "password": "<strong password>"
-  }
-  ```
-- `prod/borehole/jwt`
-  ```json
-  { "secret_key": "<long random string>" }
-  ```
-- `prod/borehole/mapbox`
-  ```json
-  { "token": "pk.xxx" }
-  ```
-- `prod/borehole/box` – contents of your Box app config JSON (entire file).
-
-### Deploying Updates
-
-Once the one-time setup is complete, deployments are:
-
+MySQL data persists in Docker volume `mysql_data`. Backup regularly:
 ```bash
-# 1. Push code (triggers GitHub Actions build)
-git push origin master
-
-# 2. Deploy to server after build finishes (~5–10 minutes)
-./scripts/deploy-prod.sh <SERVER_IP> ubuntu
+docker-compose exec mysql mysqldump -u borehole_user -p borehole_db > backup.sql
 ```
 
-The deploy script waits for images, copies config to the server, pulls from ECR, fetches secrets, and runs `docker-compose -f docker-compose.prod.yml up -d`.
-
-After a deploy, create/verify the admin user if needed:
+### Updates
 
 ```bash
-ssh ubuntu@<SERVER_IP>
-cd /opt/borehole
-sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose -f docker-compose.prod.yml exec backend python3 /app/scripts/create_admin_user.py admin <password>
+# Pull latest code
+git pull
+
+# Rebuild and restart services
+docker-compose build
+docker-compose up -d
+
+# Check logs
+docker-compose logs -f
 ```
+
+## Utility Scripts
+
+- `scripts/create_admin_user.py <username> <password>` - Create new user
+- `scripts/create_stub_data.py` - Generate test Excel files
+- `scripts/diagnose_box_permissions.py` - Debug Box API issues
+- `scripts/test_box_connection.py` - Test Box API connection
+
+## License
+
+[Your License Here]
 
 ### Server Access
 
@@ -256,86 +382,17 @@ sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose -f docker-compose
     --region us-east-2 \
     --profile hcmining-prod
   ```
+  Ensure the instance role allows `ssm:StartSession` and `ssm:DescribeInstanceInformation`; Ubuntu 22.04 images ship with the SSM agent enabled by default.
+
 - **SSH (if enabled):**
-  ```bash
-  ssh ubuntu@18.216.19.153
-  ```
-
-### Prod Quick Reference
-
-| Item | Value |
-|------|-------|
-| Instance ID | `i-03169bf6f17bc4a23` |
-| Public IP | `18.216.19.153` |
-| Region | `us-east-2` |
-| Security group | `sg-0e46e94bb982b73bd` (80/443/22 open) |
-| App root | `/opt/borehole` |
-| Entry URL | `http://18.216.19.153` |
-| Backend health | `http://18.216.19.153/api/health` |
-
-Common commands on the server:
-```bash
-cd /opt/borehole
-sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose -f docker-compose.prod.yml ps
-sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose -f docker-compose.prod.yml logs -f
-sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose -f docker-compose.prod.yml restart
-```
-
----
-
-## Operations & Maintenance
-
-- **Logs**: `docker-compose logs` or service-specific logs under `/opt/borehole/logs`.
-- **Outputs**: KMZ & audit CSVs under `/opt/borehole/output`.
-- **Database backups**:
-  ```bash
-  sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose -f docker-compose.prod.yml exec mysql \
-    mysqldump -u borehole_user -p${MYSQL_PASSWORD} borehole_db > backup_$(date +%Y%m%d).sql
-  ```
-- **Rolling restart**:
-  ```bash
-  sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose -f docker-compose.prod.yml restart
-  ```
-
-### Command Cheat Sheet
-
-| Task | Command |
-|------|---------|
-| Create admin user | `docker compose -f docker-compose.prod.yml exec backend python3 /app/scripts/create_admin_user.py admin PASSWORD` |
-| Test DB connection | `docker compose -f docker-compose.prod.yml exec backend python3 -c "from src.api.database import Database; db = Database(); db.connect(); print('OK')"` |
-| Test Box connection | `docker compose -f docker-compose.prod.yml exec pipeline python3 /app/scripts/test_box_connection.py` |
-| Tail pipeline logs | `docker compose -f docker-compose.prod.yml logs -f pipeline` |
-| Run pipeline once | `docker compose -f docker-compose.prod.yml exec pipeline python3 -m src.main --once` |
-| Drop into backend shell | `docker compose -f docker-compose.prod.yml exec backend /bin/bash` |
-| View container status | `docker compose -f docker-compose.prod.yml ps` |
-
-(Substitute `docker compose` with `sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose` on the production server.)
-
----
-
-## Security Guidance
-
-- Never commit `.env`, files under `secrets/`, or generated outputs.  
-- Production secrets belong in AWS Secrets Manager; `.env` is for local development only.  
-- Rotate JWT secrets and database passwords periodically.  
-- For production, front the EC2 instance with TLS (load balancer or nginx cert).  
-- Prefer IAM roles on EC2 instead of static AWS keys.  
-- Audit Box app scopes and ensure only the required folders are shared with the service account.
-
----
-
-## Troubleshooting
-
-| Symptom | Likely Cause | Fix |
-|---------|--------------|-----|
-| `Access denied for user 'borehole_user'` | MySQL volume created with old password | `./run.sh clean` (local) or remove volume on server, then restart |
-| `Invalid token: Signature verification failed` | Frontend using stale JWT | Log out/in (clears localStorage token) |
-| Pipeline logs `--continuous` error | Wrong command; ensure pipeline command is `python3 -m src.main` | Update compose file and restart |
-| Box 403 / empty results | Service account not collaborator or scopes missing | Invite service account to Box folder, ensure app authorised |
-| Mapbox map blank | Token missing/invalid | Update `.env`, rebuild frontend container |
-| Prod deploy script hangs on secrets | IAM role/credentials missing Secrets Manager access | Attach role or configure AWS credentials |
-| `docker-compose` not found on server | Install plugin (`sudo apt install docker-compose-plugin`) or use standalone binary | Follow setup script |
-
----
-
-If you follow this README from scratch, you can stand up the full stack locally, configure Box integration, and promote the same containers into production.
+  1. Confirm security group `sg-0e46e94bb982b73bd` allows SSH (port 22) from your current IP.
+  2. Connect (add `-i /path/to/key.pem` if your key is not already in the SSH agent):
+     ```bash
+     ssh ubuntu@18.216.19.153
+     ```
+  3. On login, change to the app directory and use the system docker-compose binary for all commands:
+     ```bash
+     cd /opt/borehole
+     sudo DOCKER_CONFIG=/root/.docker /usr/local/bin/docker-compose -f docker-compose.prod.yml ps
+     ```
+     Prefix other compose operations the same way (e.g. `logs -f`, `exec backend`, `restart`).

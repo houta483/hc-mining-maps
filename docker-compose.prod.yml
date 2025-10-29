@@ -49,7 +49,7 @@ services:
   pipeline:
     image: ${ECR_REGISTRY}/borehole-pipeline:${IMAGE_TAG:-latest}
     container_name: borehole_pipeline
-    command: ["python3", "-m", "src.main", "--continuous"]
+    command: ["python3", "-m", "src.main"]
     volumes:
       - ./config:/app/config:ro
       - ./logs:/app/logs
