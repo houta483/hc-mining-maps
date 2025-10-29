@@ -2,19 +2,66 @@
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HC Mining - Borehole Analysis Map</title>
-    <meta http-equiv="refresh" content="0; url=docs/networklink.kml">
     <style>
         body {
+            margin: 0;
+            padding: 0;
             font-family: Arial, sans-serif;
+        }
+        .header {
+            background: #333;
+            color: white;
+            padding: 15px;
             text-align: center;
-            padding: 50px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 60px);
+        }
+        .info {
+            background: #f5f5f5;
+            padding: 15px;
+            border-bottom: 1px solid #ddd;
+        }
+        .map-container {
+            flex: 1;
+            width: 100%;
+        }
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        .link {
+            margin-top: 10px;
+        }
+        .link a {
+            color: #0066cc;
+            text-decoration: none;
         }
     </style>
 </head>
 <body>
-    <h1>HC Mining - Borehole Analysis</h1>
-    <p>NetworkLink for Google Earth</p>
-    <p><a href="docs/networklink.kml">Open NetworkLink KML</a></p>
+    <div class="header">
+        <h1>HC Mining - Borehole Analysis Map</h1>
+    </div>
+    <div class="container">
+        <div class="info">
+            <p><strong>Live Map - Auto-updates every 10 minutes</strong></p>
+            <div class="link">
+                <a href="docs/networklink.kml" target="_blank">Open in Google Earth</a> |
+                <a href="https://drive.google.com/uc?export=download&id=1gWqPqTPZws_qY-JGQTBAAL7Ba-fTbw-E" target="_blank">Download KMZ</a>
+            </div>
+        </div>
+        <div class="map-container">
+            <iframe 
+                src="https://earth.google.com/web/@32.484672,-96.432978,100a,35y,0h,0t,0r/data=OgMKATA" 
+                allowfullscreen>
+            </iframe>
+        </div>
+    </div>
 </body>
 </html>
