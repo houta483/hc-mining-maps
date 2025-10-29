@@ -9,58 +9,132 @@
             margin: 0;
             padding: 0;
             font-family: Arial, sans-serif;
+            background: #f5f5f5;
         }
         .header {
-            background: #333;
+            background: #1a73e8;
             color: white;
-            padding: 15px;
+            padding: 20px;
             text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .header p {
+            margin: 5px 0 0 0;
+            opacity: 0.9;
         }
         .container {
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .instructions {
+            background: #e8f0fe;
+            padding: 20px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            border-left: 4px solid #1a73e8;
+        }
+        .instructions h2 {
+            margin-top: 0;
+            color: #1a73e8;
+        }
+        .instructions ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin: 8px 0;
+        }
+        .button-group {
             display: flex;
-            flex-direction: column;
-            height: calc(100vh - 60px);
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 15px;
         }
-        .info {
-            background: #f5f5f5;
-            padding: 15px;
-            border-bottom: 1px solid #ddd;
-        }
-        .map-container {
-            flex: 1;
-            width: 100%;
-        }
-        iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-        .link {
-            margin-top: 10px;
-        }
-        .link a {
-            color: #0066cc;
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #1a73e8;
+            color: white;
             text-decoration: none;
+            border-radius: 4px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .button:hover {
+            background: #1557b0;
+        }
+        .button.secondary {
+            background: #34a853;
+        }
+        .button.secondary:hover {
+            background: #2d8f47;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f1f3f4;
+            border-radius: 4px;
+        }
+        .status-item {
+            margin: 5px 0;
+            padding: 5px 0;
+        }
+        code {
+            background: #f1f3f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>HC Mining - Borehole Analysis Map</h1>
+        <h1>🏔️ HC Mining - Borehole Analysis Map</h1>
+        <p>Live, Auto-Updating Map</p>
     </div>
+    
     <div class="container">
-        <div class="info">
-            <p><strong>Live Map - Auto-updates every 10 minutes</strong></p>
-            <div class="link">
-                <a href="docs/networklink.kml" target="_blank">Open in Google Earth</a> |
-                <a href="https://drive.google.com/uc?export=download&id=1gWqPqTPZws_qY-JGQTBAAL7Ba-fTbw-E" target="_blank">Download KMZ</a>
+        <div class="instructions">
+            <h2>View the Map in Google Earth</h2>
+            <ol>
+                <li>Go to <a href="https://earth.google.com/web/" target="_blank">Google Earth Web</a></li>
+                <li>Click <strong>"Projects"</strong> (left sidebar, folder icon)</li>
+                <li>Click <strong>"New Project"</strong> → <strong>"Import KML file"</strong></li>
+                <li>Choose <strong>"Import from URL"</strong></li>
+                <li>Paste this URL:</li>
+            </ol>
+            <div class="status">
+                <div class="status-item">
+                    <strong>NetworkLink URL:</strong><br>
+                    <code id="networklink-url">https://houta483.github.io/hc-mining-maps/networklink.kml</code>
+                </div>
             </div>
+            <p><strong>The map will auto-update every 10 minutes!</strong></p>
         </div>
-        <div class="map-container">
-            <iframe 
-                src="https://earth.google.com/web/@32.484672,-96.432978,100a,35y,0h,0t,0r/data=OgMKATA" 
-                allowfullscreen>
-            </iframe>
+        
+        <div class="button-group">
+            <a href="https://earth.google.com/web/" target="_blank" class="button">
+                🌍 Open Google Earth Web
+            </a>
+            <a href="docs/networklink.kml" class="button secondary" download="networklink.kml">
+                📥 Download NetworkLink KML
+            </a>
+        </div>
+        
+        <div class="status">
+            <h3>Map Status</h3>
+            <div class="status-item">✅ <strong>Auto-Updates:</strong> Every 10 minutes</div>
+            <div class="status-item">✅ <strong>Last Updated:</strong> When pipeline runs</div>
+            <div class="status-item">✅ <strong>Shareable:</strong> Anyone with the URL</div>
         </div>
     </div>
 </body>
