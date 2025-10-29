@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>HC Mining, UP-B FM Layer</name>
+    <NetworkLink>
+      <name>Live FM Map - UP-B</name>
+      <refreshVisibility>1</refreshVisibility>
+      <Link>
+        <href>https://drive.google.com/uc?export=download&id=1gWqPqTPZws_qY-JGQTBAAL7Ba-fTbw-E</href>
+        <refreshMode>onInterval</refreshMode>
+        <refreshInterval>600</refreshInterval>
+      </Link>
+    </NetworkLink>
+  </Document>
+</kml>
