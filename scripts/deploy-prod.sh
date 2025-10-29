@@ -76,18 +76,39 @@ if [ $ELAPSED -ge $MAX_WAIT_TIME ]; then
     exit 1
 fi
 
-# Test SSH connection
+# Determine connection method (SSH or SSM)
+USE_SSM=false
+INSTANCE_ID="${INSTANCE_ID:-i-03169bf6f17bc4a23}"
+
 echo ""
-echo "🔌 Testing SSH connection..."
-if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$SSH_USER@$SERVER_HOST" "echo 'Connection successful'" 2>/dev/null; then
-    echo "❌ Cannot connect to server via SSH"
-    echo "   Please ensure:"
-    echo "   - Server is running and accessible"
-    echo "   - SSH key is configured (~/.ssh/id_rsa or specify with -i)"
-    echo "   - Security group allows SSH (port 22) from your IP"
-    exit 1
+echo "🔌 Testing connection method..."
+if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$SSH_USER@$SERVER_HOST" "echo 'Connection successful'" 2>/dev/null; then
+    echo "✅ SSH connection successful (using SSH)"
+    USE_SSM=false
+else
+    echo "⚠️  SSH connection failed, trying Systems Manager..."
+    
+    # Check if SSM is available
+    if aws ssm describe-instance-information \
+        --instance-information-filter-list "key=InstanceIds,valueSet=$INSTANCE_ID" \
+        --region "$REGION" \
+        --profile hcmining-prod \
+        --query 'InstanceInformationList[0].PingStatus' \
+        --output text 2>/dev/null | grep -q "Online"; then
+        echo "✅ Systems Manager available (using SSM)"
+        USE_SSM=true
+    else
+        echo "❌ Cannot connect to server via SSH or Systems Manager"
+        echo ""
+        echo "   SSH failed - please ensure:"
+        echo "   - SSH key is configured (~/.ssh/id_rsa or specify with -i)"
+        echo "   - Security group allows SSH (port 22) from your IP"
+        echo ""
+        echo "   Systems Manager not available - try:"
+        echo "   aws ssm start-session --target $INSTANCE_ID --region $REGION --profile hcmining-prod"
+        exit 1
+    fi
 fi
-echo "✅ SSH connection successful"
 
 # Deploy to server
 echo ""

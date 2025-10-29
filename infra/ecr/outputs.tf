@@ -28,3 +28,4 @@ output "pipeline_repository_arn" {
   value       = aws_ecr_repository.pipeline.arn
 }
 
+
