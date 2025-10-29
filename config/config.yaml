@@ -1,0 +1,45 @@
+# Box to Google Earth Pipeline Configuration
+
+# Mine areas to process
+# Option 1: Auto-discover from parent folder (set parent_folder_id below)
+# Option 2: Manually specify mine areas (set mine_areas list)
+mine_areas: []  # Empty list means auto-discover from parent_folder_id
+
+# Parent folder containing all mine areas (for auto-discovery)
+# Get this from Box URL: https://app.box.com/folder/1234567890
+# NOTE: Use the NUMERIC folder ID from Box, not the string ID from share links
+# Example: https://houghtoncap.box.com/s/FOLDER_SHARE_ID_HERE
+parent_folder_id: "YOUR_BOX_FOLDER_ID_HERE"
+
+# Manual mine area configuration (uncomment if not using auto-discover):
+# mine_areas:
+#   - name: "UP-B"
+#     box_folder_id: "FOLDER_ID_HERE"
+#   - name: "LC-A"
+#     box_folder_id: "FOLDER_ID_HERE"
+
+# AWS Configuration
+s3_bucket: "hc-mining-maps"
+cloudfront_distribution_id: "DIST_ID_HERE"
+aws_region: "us-east-1"
+
+# Output Configuration
+kmz_filename_template: "hc_mining_{mine_area}_fm.kmz"
+public_url_template: "https://d123456.cloudfront.net/{filename}"
+audit_filename_template: "audit_{mine_area}_{timestamp}.csv"
+
+# Box Settings
+box_shared_link_access: "collaborators"
+
+# Pipeline Settings
+refresh_seconds: 600  # 10 minutes
+log_level: "INFO"
+log_path: "/app/logs/pipeline.log"
+
+# Validation Settings
+max_coordinate_spread_meters: 10
+fm_min_value: 0.5
+fm_max_value: 7.0
+
+# Audit Retention (days) - Old audit CSV files are automatically deleted
+audit_retention_days: 7

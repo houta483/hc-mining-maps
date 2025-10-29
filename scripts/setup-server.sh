@@ -108,3 +108,4 @@ echo "Or attach an IAM role to this EC2 instance with:"
 echo "  - ECR read permissions"
 echo "  - Secrets Manager read permissions"
 
+
