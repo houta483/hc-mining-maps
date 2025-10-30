@@ -127,12 +127,38 @@ APP_DIR="${4:-/opt/borehole}"
 cd "$APP_DIR" || { echo "❌ App directory not found: $APP_DIR"; exit 1; }
 
 echo "📥 Logging in to ECR..."
-aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+DOCKER_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+DOCKER_CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}"
+mkdir -p "$DOCKER_CONFIG_DIR"
+PASSWORD=$(aws ecr get-login-password --region "$REGION")
+if [ -z "$PASSWORD" ]; then
+    echo "❌ Failed to retrieve ECR login password"
+    exit 1
+fi
+AUTH=$(printf "AWS:%s" "$PASSWORD" | base64 | tr -d '\n')
+cat > "$DOCKER_CONFIG_DIR/config.json" <<'EOF'
+{
+  "auths": {
+    "__REGISTRY__": {
+      "auth": "__AUTH__"
+    },
+    "https://__REGISTRY__": {
+      "auth": "__AUTH__"
+    }
+  },
+  "credsStore": ""
+}
+EOF
+sed -i "s|__REGISTRY__|$DOCKER_REGISTRY|g" "$DOCKER_CONFIG_DIR/config.json"
+sed -i "s|__AUTH__|$AUTH|g" "$DOCKER_CONFIG_DIR/config.json"
+chmod 600 "$DOCKER_CONFIG_DIR/config.json"
+docker --config "$DOCKER_CONFIG_DIR" login --username AWS --password-stdin "$DOCKER_REGISTRY" <<<"$PASSWORD" >/dev/null 2>&1 || true
+export DOCKER_CONFIG="$DOCKER_CONFIG_DIR"
 
 echo "📥 Pulling latest images..."
-docker pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-frontend:${IMAGE_TAG}
-docker pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-backend:${IMAGE_TAG}
-docker pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-pipeline:${IMAGE_TAG}
+docker --config "$DOCKER_CONFIG_DIR" pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-frontend:${IMAGE_TAG}
+docker --config "$DOCKER_CONFIG_DIR" pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-backend:${IMAGE_TAG}
+docker --config "$DOCKER_CONFIG_DIR" pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-pipeline:${IMAGE_TAG}
 
 echo "📝 Updating environment variables..."
 export ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
