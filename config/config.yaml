@@ -9,6 +9,7 @@ mine_areas: []  # Empty list means auto-discover from parent_folder_id
 # Get this from Box URL: https://app.box.com/folder/1234567890
 # NOTE: Use the NUMERIC folder ID from Box, not the string ID from share links
 # Example: https://houghtoncap.box.com/s/FOLDER_SHARE_ID_HERE
+# (Production deployments override this via BOX_PARENT_FOLDER_ID from Secrets Manager)
 parent_folder_id: "YOUR_BOX_FOLDER_ID_HERE"
 
 # Manual mine area configuration (uncomment if not using auto-discover):

@@ -57,3 +57,8 @@ echo ""
 echo "   3. Run pipeline (continuous mode):"
 echo "      docker compose -f $COMPOSE_FILE logs -f pipeline"
 
+
+
+
+
+

@@ -63,3 +63,6 @@ Thumbs.db
 .terraform/
 *.tfstate
 *.tfstate.backup
+
+src/data/
+secrets/

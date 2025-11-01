@@ -19,19 +19,21 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
+  gdal-bin \
+  python3-gdal \
   && rm -rf /var/lib/apt/lists/*
 
 # Install packages system-wide - copy requirements.txt and install  
 COPY requirements.txt /tmp/requirements.txt
+ENV PIP_DEFAULT_TIMEOUT=120
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt && \
   rm /tmp/requirements.txt
 
 # Copy application code
 COPY src/ ./src/
 COPY config/ ./config/
-COPY test_data/ ./test_data/
 
 # Create directories for logs and output
 RUN mkdir -p /app/logs /app/output

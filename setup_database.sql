@@ -25,3 +25,8 @@ CREATE TABLE IF NOT EXISTS users (
 -- Verify
 SELECT 'Database setup complete!' AS status;
 SELECT COUNT(*) AS tables_created FROM information_schema.tables WHERE table_schema = 'borehole_db';
+
+
+
+
+

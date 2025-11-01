@@ -25,6 +25,9 @@ FROM nginx:alpine
 # Copy built files to nginx
 COPY --from=builder /app/dist /usr/share/nginx/html
 
+# Replace default server config with SPA-friendly config
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
 # Create script to inject Mapbox token into index.html at runtime
 RUN echo '#!/bin/sh' > /docker-entrypoint.sh && \
   echo 'if [ -n "$MAPBOX_TOKEN" ]; then' >> /docker-entrypoint.sh && \

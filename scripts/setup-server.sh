@@ -109,3 +109,8 @@ echo "  - ECR read permissions"
 echo "  - Secrets Manager read permissions"
 
 
+
+
+
+
+

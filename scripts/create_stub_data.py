@@ -191,8 +191,7 @@ def main():
                 )
 
     print(f"\n✓ Created stub data in {base_dir.absolute()}")
-    print(f"\nTo use this data, set USE_LOCAL_DATA=true in .env or run with:")
-    print(f"  USE_LOCAL_DATA=true docker-compose up")
+    print("\nUpload the generated folders/files to the target Box mine area to have the pipeline ingest them.")
 
 
 if __name__ == "__main__":

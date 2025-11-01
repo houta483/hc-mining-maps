@@ -1,6 +1,7 @@
 """Main orchestrator for the Box to Google Earth pipeline."""
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -8,7 +9,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Setup debugger if DEBUG_MODE is enabled
 if os.environ.get("DEBUG_MODE", "").lower() == "true":
@@ -35,6 +36,11 @@ from src.publisher import Publisher
 
 logger = logging.getLogger(__name__)
 
+STATUS_FILE_ENV_VAR = "PIPELINE_STATUS_PATH"
+STATUS_FILE_DEFAULT = "/app/logs/pipeline_status.json"
+TRIGGER_FILE_ENV_VAR = "PIPELINE_TRIGGER_PATH"
+TRIGGER_FILE_DEFAULT = "/app/logs/manual_trigger.json"
+
 
 class Pipeline:
     """Main pipeline orchestrator."""
@@ -47,16 +53,12 @@ class Pipeline:
         """
         self.config = config
 
-        # Initialize Box client (skip if using local data)
-        self.use_local_data = os.environ.get("USE_LOCAL_DATA", "").lower() == "true"
-        if not self.use_local_data:
-            box_config_path = os.environ.get(
-                "BOX_CONFIG", "/app/secrets/box_config.json"
-            )
-            self.box_client = BoxClient(box_config_path)
-        else:
-            self.box_client = None
-            logger.info("Using local test data mode (USE_LOCAL_DATA=true)")
+        # Initialize Box client
+        box_config_path = os.environ.get(
+            "BOX_CONFIG",
+            "/app/secrets/box_config.json",
+        )
+        self.box_client = BoxClient(box_config_path)
 
         # Initialize publisher
         self.publisher = Publisher(
@@ -66,7 +68,29 @@ class Pipeline:
             credentials_file=os.environ.get("AWS_SHARED_CREDENTIALS_FILE"),
         )
 
-        # Metrics
+        # Paths for status tracking and manual triggers
+        self.status_path = Path(
+            os.environ.get(STATUS_FILE_ENV_VAR, STATUS_FILE_DEFAULT)
+        )
+        self.manual_trigger_path = Path(
+            os.environ.get(TRIGGER_FILE_ENV_VAR, TRIGGER_FILE_DEFAULT)
+        )
+
+        self.status_path.parent.mkdir(parents=True, exist_ok=True)
+        self.manual_trigger_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self._reset_metrics()
+        self._write_status(
+            {
+                "state": "idle",
+                "message": "Pipeline initialized",
+                "last_run_status": None,
+            }
+        )
+
+    def _reset_metrics(self) -> None:
+        """Reset metric counters for a new run."""
+
         self.metrics = {
             "files_processed": 0,
             "holes_updated": 0,
@@ -75,43 +99,49 @@ class Pipeline:
             "warnings_count": 0,
         }
 
-    def _walk_local_folder_tree(self, mine_area_name: str) -> List[tuple]:
-        """Walk local test_data directory instead of Box.
+    def _write_status(self, updates: Dict) -> None:
+        """Persist pipeline status to disk for the API/frontend."""
 
-        Args:
-            mine_area_name: Name of mine area (e.g., "UP-B")
+        status: Dict = {}
+        if self.status_path.exists():
+            try:
+                status = json.loads(self.status_path.read_text())
+            except Exception as exc:  # pragma: no cover - best effort logging
+                logger.warning("Could not read existing status file: %s", exc)
+                status = {}
 
-        Returns:
-            List of (hole_folder_name, files) tuples
-        """
-        results = []
-        test_data_dir = Path("/app/test_data") / mine_area_name
+        status.update(updates)
+        status["updated_at"] = datetime.utcnow().isoformat() + "Z"
 
-        if not test_data_dir.exists():
-            logger.warning(f"Local test data not found: {test_data_dir}")
-            return results
+        tmp_path = self.status_path.with_suffix(".tmp")
+        try:
+            tmp_path.write_text(json.dumps(status, indent=2))
+            tmp_path.replace(self.status_path)
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.error("Failed to write pipeline status: %s", exc)
 
-        logger.info(f"Walking local folder tree from {test_data_dir}")
+    def _consume_manual_trigger(self) -> Optional[Dict]:
+        """Return manual trigger metadata if requested, clearing the flag."""
 
-        for hole_dir in sorted(test_data_dir.iterdir()):
-            if hole_dir.is_dir():
-                hole_name = hole_dir.name
-                hole_files = []
+        if not self.manual_trigger_path.exists():
+            return None
 
-                for file_path in sorted(hole_dir.glob("*.xlsx")):
-                    hole_files.append(
-                        {
-                            "id": f"local_{file_path.stem}",
-                            "name": file_path.name,
-                            "parent_folder": hole_name,
-                            "local_path": str(file_path),
-                        }
-                    )
+        trigger_data: Dict = {}
+        try:
+            trigger_text = self.manual_trigger_path.read_text()
+            if trigger_text:
+                trigger_data = json.loads(trigger_text)
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.warning("Failed to parse manual trigger file: %s", exc)
+            trigger_data = {"source": "manual"}
 
-                if hole_files:
-                    results.append((hole_name, hole_files))
+        try:
+            self.manual_trigger_path.unlink()
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.warning("Failed to remove manual trigger file: %s", exc)
 
-        return results
+        trigger_data.setdefault("source", "manual")
+        return trigger_data
 
     def process_mine_area(self, mine_area: Dict) -> Dict[str, List[Dict]]:
         """Process a single mine area.
@@ -125,84 +155,112 @@ class Pipeline:
         mine_area_name = mine_area["name"]
         folder_id = mine_area.get("box_folder_id", "")
 
-        logger.info(f"Processing mine area: {mine_area_name} (folder: {folder_id})")
+        logger.info(
+            "Processing mine area: %s (folder: %s)",
+            mine_area_name,
+            folder_id,
+        )
 
         # Walk folder tree to get hole folders and files
-        if self.use_local_data:
-            hole_folders = self._walk_local_folder_tree(mine_area_name)
-        else:
-            hole_folders = self.box_client.walk_folder_tree(folder_id)
+        hole_folders = self.box_client.walk_folder_tree(folder_id)
 
         all_intervals = []
         hole_data: Dict[str, List[Dict]] = {}
+        processed_holes: set[str] = set()
+        metrics = self.metrics
 
         # Create temporary directory for downloads
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
             # Process each hole folder
-            for hole_id, files in hole_folders:
-                hole_intervals = []
-
+            for folder_hole_id, files in hole_folders:
                 for file_info in files:
                     file_id = file_info["id"]
                     filename = file_info["name"]
 
                     try:
-                        # Get file path (local or download from Box)
-                        if self.use_local_data:
-                            local_path = Path(
-                                file_info.get("local_path", temp_path / filename)
-                            )
-                            box_link = ""  # No Box link for local files
-                        else:
-                            local_path = temp_path / filename
-                            self.box_client.download_file(file_id, str(local_path))
-                            box_link = self.box_client.ensure_shared_link(
-                                file_id, self.config.get_box_shared_link_access()
-                            )
+                        # Download file from Box
+                        local_path = temp_path / filename
+                        self.box_client.download_file(file_id, str(local_path))
+                        box_link = self.box_client.get_file_link(
+                            file_id, self.config.get_box_shared_link_access()
+                        )
 
                         # Parse file
-                        parsed_data = parse_file(str(local_path), hole_id=hole_id)
+                        parsed_data = parse_file(
+                            str(local_path),
+                            hole_id=folder_hole_id,
+                        )
 
-                        # Validate FM value
-                        fm_value = parsed_data["fm_value"]
-                        if not (
-                            self.config.get_fm_min_value()
-                            <= fm_value
-                            <= self.config.get_fm_max_value()
-                        ):
-                            self.metrics["warnings_count"] += 1
-                            logger.warning(
-                                f"FM value {fm_value} outside expected range "
-                                f"({self.config.get_fm_min_value()}-{self.config.get_fm_max_value()}) "
-                                f"for {filename}"
+                        target_id = parsed_data.get(
+                            "hole_id",
+                            folder_hole_id,
+                        )
+                        file_warnings = parsed_data.setdefault("warnings", [])
+
+                        if target_id != folder_hole_id:
+                            mismatch_msg = (
+                                "{file}: sheet hole '{sheet}' != " "folder '{folder}'"
+                            ).format(
+                                file=filename,
+                                sheet=target_id,
+                                folder=folder_hole_id,
                             )
+                            file_warnings.append(mismatch_msg)
+
+                        fm_value = parsed_data["fm_value"]
+                        fm_min = self.config.get_fm_min_value()
+                        fm_max = self.config.get_fm_max_value()
+                        if not (fm_min <= fm_value <= fm_max):
+                            fm_warning = (
+                                "{file}: FM {value} outside range " "{lower}-{upper}"
+                            ).format(
+                                file=filename,
+                                value=fm_value,
+                                lower=fm_min,
+                                upper=fm_max,
+                            )
+                            file_warnings.append(fm_warning)
+
+                        if file_warnings:
+                            for warning_msg in file_warnings:
+                                logger.warning(warning_msg)
+                            metrics["warnings_count"] += len(file_warnings)
 
                         # Add Box metadata
                         parsed_data["box_file_id"] = file_id
                         parsed_data["box_link"] = box_link
-                        parsed_data["warnings"] = []
 
-                        hole_intervals.append(parsed_data)
+                        hole_data.setdefault(
+                            target_id,
+                            [],
+                        ).append(parsed_data)
                         all_intervals.append(parsed_data)
-                        self.metrics["files_processed"] += 1
-                        self.metrics["intervals_added"] += 1
+                        metrics["files_processed"] += 1
+                        metrics["intervals_added"] += 1
+                        if target_id not in processed_holes:
+                            processed_holes.add(target_id)
+                            metrics["holes_updated"] += 1
 
                         logger.info(
-                            f"Processed {filename}: hole={hole_id}, "
-                            f"interval={parsed_data['start_ft']}-{parsed_data['end_ft']}, "
-                            f"FM={fm_value:.2f}"
+                            "Processed %s: hole=%s, interval=%s-%s, FM=%.2f",
+                            filename,
+                            target_id,
+                            parsed_data["start_ft"],
+                            parsed_data["end_ft"],
+                            fm_value,
                         )
 
                     except Exception as e:
-                        self.metrics["errors_count"] += 1
-                        logger.error(f"Error processing {filename}: {e}", exc_info=True)
+                        metrics["errors_count"] += 1
+                        logger.error(
+                            "Error processing %s: %s",
+                            filename,
+                            e,
+                            exc_info=True,
+                        )
                         continue
-
-                if hole_intervals:
-                    hole_data[hole_id] = hole_intervals
-                    self.metrics["holes_updated"] += 1
 
         # Generate audit CSV
         if all_intervals:
@@ -257,7 +315,11 @@ class Pipeline:
         # Upload to S3 (optional - skip if no credentials)
         try:
             s3_key = kmz_filename
-            self.publisher.upload_kmz(str(output_path), s3_key, public_read=True)
+            self.publisher.upload_kmz(
+                str(output_path),
+                s3_key,
+                public_read=True,
+            )
 
             # Invalidate CloudFront
             self.publisher.invalidate_cloudfront([f"/{kmz_filename}"])
@@ -269,26 +331,57 @@ class Pipeline:
             logger.info(f"Published KMZ: {public_url}")
             return public_url
         except Exception as e:
-            # If upload fails (e.g., no AWS credentials), try Google Drive or nginx
+            # If upload fails (e.g., missing AWS creds)
+            # fall back to the local file
             if "credentials" in str(e).lower() or "NoCredentialsError" in str(
                 type(e).__name__
             ):
-                logger.warning(f"Skipping S3 upload (no credentials): {e}")
+                logger.warning("Skipping S3 upload (no credentials): %s", e)
 
-                # External publishing removed - KMZ is now served by backend API
-                logger.info(f"KMZ saved locally: {output_path}")
+                # External publishing is handled by the backend API
+                logger.info("KMZ saved locally: %s", output_path)
                 return str(output_path)
             else:
                 # Re-raise other errors
                 raise
 
-    def run_once(self) -> int:
+    def run_once(self, trigger: Optional[Dict] = None) -> int:
         """Run pipeline once for all mine areas.
+
+        Args:
+            trigger: Metadata about what initiated the run.
 
         Returns:
             Exit code (0 for success, non-zero for failure)
         """
+
+        trigger_data = trigger or {"source": "schedule"}
         start_time = time.time()
+        run_started_at = datetime.utcnow().isoformat() + "Z"
+
+        self._reset_metrics()
+
+        trigger_source = trigger_data.get("source", "schedule")
+        logger.info(
+            "Starting pipeline run (trigger=%s, requested_by=%s)",
+            trigger_source,
+            trigger_data.get("requested_by", "system"),
+        )
+
+        self._write_status(
+            {
+                "state": "running",
+                "message": "Pipeline run started",
+                "last_run_started": run_started_at,
+                "last_run_completed": None,
+                "last_run_status": "running",
+                "trigger": trigger_data,
+                "metrics": self.metrics,
+            }
+        )
+
+        exit_code = 1
+        status_message = "Pipeline failed"
 
         try:
             # Get mine areas (auto-discover or from config)
@@ -296,119 +389,199 @@ class Pipeline:
 
             # Auto-discover if configured
             if self.config.should_auto_discover():
-                if self.use_local_data:
-                    # Use local test data discovery
-                    test_data_dir = Path("/app/test_data")
-                    mine_areas = []
-                    if test_data_dir.exists():
-                        for area_dir in test_data_dir.iterdir():
-                            if area_dir.is_dir():
-                                mine_areas.append(
-                                    {
-                                        "name": area_dir.name,
-                                        "box_folder_id": f"local_{area_dir.name}",
-                                    }
-                                )
-                    logger.info(
-                        f"Found {len(mine_areas)} mine area(s) in local test_data"
-                    )
-                else:
-                    parent_folder_id = self.config.get_parent_folder_id()
-                    logger.info(
-                        f"Auto-discovering mine areas from parent folder: {parent_folder_id}"
-                    )
-                    mine_areas = discover_mine_areas(self.box_client, parent_folder_id)
+                parent_folder_id = self.config.get_parent_folder_id()
+                logger.info(
+                    "Auto-discovering mine areas from parent folder: %s",
+                    parent_folder_id,
+                )
+                mine_areas = discover_mine_areas(
+                    self.box_client,
+                    parent_folder_id,
+                )
 
             if not mine_areas:
                 logger.error("No mine areas found or configured")
-                return 1
+                status_message = "No mine areas found or configured"
+                exit_code = 1
+            else:
+                logger.info("Processing %d mine area(s)", len(mine_areas))
 
-            logger.info(f"Processing {len(mine_areas)} mine area(s)")
-
-            for mine_area in mine_areas:
-                try:
-                    # Process mine area
-                    hole_data = self.process_mine_area(mine_area)
-
-                    if not hole_data:
-                        logger.warning(
-                            f"No data processed for mine area {mine_area['name']}"
-                        )
-                        continue
-
-                    # Generate and publish KMZ
+                for mine_area in mine_areas:
                     try:
-                        kmz_url = self.generate_and_publish_kmz(mine_area, hole_data)
+                        # Process mine area
+                        hole_data = self.process_mine_area(mine_area)
 
-                        # Publishing to external services removed - KMZ is now served
-                        # directly by the backend API at /api/geojson
-                        logger.info(
-                            f"✅ KMZ generated for {mine_area['name']}. "
-                            f"Access via web app at http://localhost:80"
-                        )
-                    except Exception as e:
+                        if not hole_data:
+                            logger.warning(
+                                "No data processed for mine area %s",
+                                mine_area["name"],
+                            )
+                            continue
+
+                        # Generate and publish KMZ
+                        try:
+                            self.generate_and_publish_kmz(mine_area, hole_data)
+
+                            # Frontend fetches the KMZ via the backend API
+                            logger.info(
+                                "✅ KMZ generated for %s. "
+                                "Access via web app at http://localhost:80",
+                                mine_area["name"],
+                            )
+                        except Exception as exc:
+                            self.metrics["errors_count"] += 1
+                            logger.error(
+                                "Error publishing KMZ for %s: %s",
+                                mine_area["name"],
+                                exc,
+                                exc_info=True,
+                            )
+                            continue
+
+                    # pragma: no cover - guardrail
+                    except Exception as exc:
                         self.metrics["errors_count"] += 1
                         logger.error(
-                            f"Error publishing KMZ for {mine_area['name']}: {e}",
+                            "Error processing mine area %s: %s",
+                            mine_area["name"],
+                            exc,
                             exc_info=True,
                         )
                         continue
 
-                except Exception as e:
-                    self.metrics["errors_count"] += 1
-                    logger.error(
-                        f"Error processing mine area {mine_area['name']}: {e}",
-                        exc_info=True,
-                    )
-                    continue
+                runtime = time.time() - start_time
+                self.metrics["runtime_seconds"] = round(runtime, 2)
 
-            # Log metrics
+                logger.info(
+                    "Pipeline completed: files=%s, holes=%s, intervals=%s, "
+                    "errors=%s, warnings=%s, runtime=%.1fs",
+                    self.metrics["files_processed"],
+                    self.metrics["holes_updated"],
+                    self.metrics["intervals_added"],
+                    self.metrics["errors_count"],
+                    self.metrics["warnings_count"],
+                    runtime,
+                )
+
+                # Treat runs with at least some intervals as successful,
+                # even if some files failed, so the UI can update.
+                if self.metrics["intervals_added"] > 0:
+                    if self.metrics["errors_count"] > 0:
+                        exit_code = 0
+                        status_message = "Pipeline completed with some errors"
+                    else:
+                        exit_code = 0
+                        status_message = "Pipeline run completed successfully"
+                else:
+                    exit_code = 1
+                    status_message = "Pipeline completed with no intervals processed"
+
+        # pragma: no cover - operational guardrail
+        except Exception as exc:
+            logger.error("Pipeline failed: %s", exc, exc_info=True)
+            status_message = f"Pipeline failed: {exc}"
+            exit_code = 1
+        finally:
             runtime = time.time() - start_time
-            self.metrics["runtime_seconds"] = round(runtime, 2)
-
-            logger.info(
-                f"Pipeline completed: "
-                f"files={self.metrics['files_processed']}, "
-                f"holes={self.metrics['holes_updated']}, "
-                f"intervals={self.metrics['intervals_added']}, "
-                f"errors={self.metrics['errors_count']}, "
-                f"warnings={self.metrics['warnings_count']}, "
-                f"runtime={runtime:.1f}s"
+            runtime_sec = round(runtime, 2)
+            self.metrics.setdefault(
+                "runtime_seconds",
+                runtime_sec,
             )
 
-            # Return non-zero exit code if errors occurred
-            if self.metrics["errors_count"] > 0:
-                return 1
+            completed_at = datetime.utcnow().isoformat() + "Z"
+            final_status = {
+                "state": "idle",
+                "message": status_message,
+                "last_run_started": run_started_at,
+                "last_run_completed": completed_at,
+                "last_run_status": "success" if exit_code == 0 else "error",
+                "trigger": trigger_data,
+                "metrics": self.metrics,
+                "exit_code": exit_code,
+            }
+            self._write_status(final_status)
 
-            return 0
-
-        except Exception as e:
-            logger.error(f"Pipeline failed: {e}", exc_info=True)
-            return 1
+        return exit_code
 
     def run_continuous(self):
         """Run pipeline continuously on configured interval."""
         refresh_seconds = self.config.get_refresh_seconds()
 
         logger.info(
-            f"Starting continuous pipeline (refresh interval: {refresh_seconds}s)"
+            "Starting continuous pipeline (refresh interval: %ss)",
+            refresh_seconds,
         )
+
+        if refresh_seconds > 0:
+            check_interval = max(1, min(10, int(refresh_seconds)))
+        else:
+            check_interval = 5
 
         while True:
             try:
-                exit_code = self.run_once()
-                if exit_code != 0:
-                    logger.error(f"Pipeline run failed with exit code {exit_code}")
+                trigger_data = self._consume_manual_trigger()
+                if trigger_data:
+                    logger.info(
+                        "Manual pipeline run requested by %s",
+                        trigger_data.get("requested_by", "unknown"),
+                    )
+                else:
+                    trigger_data = {"source": "schedule"}
 
-                logger.info(f"Waiting {refresh_seconds}s before next run...")
-                time.sleep(refresh_seconds)
+                exit_code = self.run_once(trigger_data)
+                if exit_code != 0:
+                    logger.error(
+                        "Pipeline run failed with exit code %s",
+                        exit_code,
+                    )
+
+                if refresh_seconds <= 0:
+                    continue
+
+                logger.info(
+                    "Waiting %ss before next scheduled run...",
+                    refresh_seconds,
+                )
+
+                wait_elapsed = 0.0
+                while wait_elapsed < refresh_seconds:
+                    sleep_for = min(
+                        check_interval,
+                        refresh_seconds - wait_elapsed,
+                    )
+                    time.sleep(sleep_for)
+                    wait_elapsed += sleep_for
+
+                    trigger_data = self._consume_manual_trigger()
+                    if trigger_data:
+                        logger.info(
+                            "Manual pipeline run requested by %s",
+                            trigger_data.get("requested_by", "unknown"),
+                        )
+                        exit_code = self.run_once(trigger_data)
+                        if exit_code != 0:
+                            logger.error(
+                                "Pipeline run failed with exit code %s",
+                                exit_code,
+                            )
+                        wait_elapsed = 0.0
+                        logger.info(
+                            "Waiting %ss before next scheduled run...",
+                            refresh_seconds,
+                        )
 
             except KeyboardInterrupt:
                 logger.info("Pipeline stopped by user")
                 break
-            except Exception as e:
-                logger.error(f"Unexpected error in continuous mode: {e}", exc_info=True)
-                time.sleep(refresh_seconds)
+            # pragma: no cover - operational guardrail
+            except Exception as exc:
+                logger.error(
+                    "Unexpected error in continuous mode: %s",
+                    exc,
+                    exc_info=True,
+                )
+                time.sleep(max(refresh_seconds, check_interval))
 
 
 def main():

@@ -40,6 +40,39 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_data)
 
 
+class RedactFilter(logging.Filter):
+    """Filter that redacts sensitive information from log messages."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+
+        # Simple redactions: emails, Box share/download URLs, Authorization headers
+        try:
+            import re
+
+            # redact email addresses
+            msg = re.sub(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", "<redacted_email>", msg)
+
+            # redact Box URLs (share/preview/download)
+            msg = re.sub(r"https?://(?:[\w.-]*box\.com|[\w.-]*boxcloud\.com)[^\s]*", "<redacted_url>", msg)
+
+            # redact Authorization header values if they sneak into logs
+            msg = re.sub(r"(Authorization\s*[:=]\s*)'[^']*'", r"\1'<redacted_token>'", msg)
+            msg = re.sub(r"(Authorization\s*[:=]\s*)\"[^\"]*\"", r"\1\"<redacted_token>\"", msg)
+
+            # redact common spreadsheet filenames
+            msg = re.sub(r"\b[^\s/]+\.(?:xlsx|xlsm?|csv)\b", "<redacted_file>", msg, flags=re.IGNORECASE)
+
+            # assign redacted message back to record
+            record.msg = msg
+            record.args = ()
+        except Exception:
+            # If redaction fails for any reason, pass the record through unchanged
+            pass
+
+        return True
+
+
 def setup_logging(
     log_level: str = "INFO",
     log_path: Optional[str] = None,
@@ -74,6 +107,7 @@ def setup_logging(
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(RedactFilter())
     root_logger.addHandler(console_handler)
 
     # File handler if path provided (with rotation)
@@ -89,10 +123,15 @@ def setup_logging(
         )
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(RedactFilter())
         root_logger.addHandler(file_handler)
 
     # Set levels for third-party libraries
     logging.getLogger("boto3").setLevel(logging.WARNING)
     logging.getLogger("botocore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("boxsdk").setLevel(logging.INFO)
+
+    # Suppress verbose Box SDK network logging
+    logging.getLogger("boxsdk").setLevel(logging.WARNING)
+    logging.getLogger("boxsdk.network").setLevel(logging.ERROR)
+    logging.getLogger("boxsdk.network.default_network").setLevel(logging.ERROR)

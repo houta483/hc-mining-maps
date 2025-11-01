@@ -1,217 +1,116 @@
 #!/bin/bash
-# One-command deployment script for borehole analysis app (Docker Compose on server)
+# Deploy the monolith stack to a single Docker host (default: 18.216.19.153)
 # Usage: ./scripts/deploy-prod.sh [server-host] [ssh-user]
 
-set -e
+set -euo pipefail
+SERVER_HOST=${1:-${DEPLOY_SERVER_HOST:-18.216.19.153}}
+SSH_USER=${2:-${DEPLOY_SSH_USER:-ubuntu}}
+APP_DIR=${REMOTE_APP_DIR:-/opt/borehole}
+ENV_FILE_PATH=${ENV_FILE:-.env.prod}
 
-echo "🚀 Borehole Analysis App - Production Deployment"
-echo "================================================="
+if [[ -z "${SERVER_HOST}" ]]; then
+  cat <<EOF
+Usage: ./scripts/deploy-prod.sh <server-host> [ssh-user]
 
-# Configuration
-REGION="${AWS_REGION:-us-east-2}"
-ACCOUNT_ID="553165044639"
-ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
-
-# Get current git SHA for image tag
-IMAGE_TAG=$(git rev-parse HEAD)
-echo "📌 Using image tag: $IMAGE_TAG"
-
-# Get server connection details
-SERVER_HOST="${1:-${DEPLOY_SERVER_HOST}}"
-SSH_USER="${2:-${DEPLOY_SSH_USER:-ubuntu}}"
-
-if [ -z "$SERVER_HOST" ]; then
-    echo "❌ Error: Server host not provided"
-    echo ""
-    echo "Usage: ./scripts/deploy-prod.sh <server-host> [ssh-user]"
-    echo "   Or set environment variables:"
-    echo "   export DEPLOY_SERVER_HOST=your-server-ip-or-domain"
-    echo "   export DEPLOY_SSH_USER=ubuntu"
-    exit 1
-fi
-
-echo "📡 Server: $SSH_USER@$SERVER_HOST"
-echo ""
-
-# Wait for GitHub Actions to build and push images
-echo "⏳ Checking if images are ready in ECR..."
-
-check_image_exists() {
-    local repo_name=$1
-    aws ecr describe-images \
-        --repository-name "$repo_name" \
-        --image-ids imageTag="$IMAGE_TAG" \
-        --region "$REGION" \
-        --profile hcmining-prod \
-        --query 'imageDetails[0].imageTags' \
-        --output text 2>/dev/null | grep -q "$IMAGE_TAG"
-}
-
-MAX_WAIT_TIME=300  # 5 minutes
-WAIT_INTERVAL=10   # 10 seconds
-ELAPSED=0
-
-while [ $ELAPSED -lt $MAX_WAIT_TIME ]; do
-    if check_image_exists "borehole-frontend" && \
-       check_image_exists "borehole-backend" && \
-       check_image_exists "borehole-pipeline"; then
-        echo "✅ All images are ready!"
-        break
-    fi
-    
-    if [ $ELAPSED -eq 0 ]; then
-        echo "   Waiting for GitHub Actions to build images..."
-        echo "   (This may take a few minutes if build is still running)"
-    fi
-    
-    echo "   Still waiting... (${ELAPSED}s elapsed)"
-    sleep $WAIT_INTERVAL
-    ELAPSED=$((ELAPSED + WAIT_INTERVAL))
-done
-
-if [ $ELAPSED -ge $MAX_WAIT_TIME ]; then
-    echo "❌ Timeout waiting for images."
-    echo "   Please ensure GitHub Actions workflow completed successfully."
-    echo "   Or use: git push origin master to trigger build"
-    exit 1
-fi
-
-# Determine connection method (SSH or SSM)
-USE_SSM=false
-INSTANCE_ID="${INSTANCE_ID:-i-03169bf6f17bc4a23}"
-
-echo ""
-echo "🔌 Testing connection method..."
-if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$SSH_USER@$SERVER_HOST" "echo 'Connection successful'" 2>/dev/null; then
-    echo "✅ SSH connection successful (using SSH)"
-    USE_SSM=false
-else
-    echo "⚠️  SSH connection failed, trying Systems Manager..."
-    
-    # Check if SSM is available
-    if aws ssm describe-instance-information \
-        --instance-information-filter-list "key=InstanceIds,valueSet=$INSTANCE_ID" \
-        --region "$REGION" \
-        --profile hcmining-prod \
-        --query 'InstanceInformationList[0].PingStatus' \
-        --output text 2>/dev/null | grep -q "Online"; then
-        echo "✅ Systems Manager available (using SSM)"
-        USE_SSM=true
-    else
-        echo "❌ Cannot connect to server via SSH or Systems Manager"
-        echo ""
-        echo "   SSH failed - please ensure:"
-        echo "   - SSH key is configured (~/.ssh/id_rsa or specify with -i)"
-        echo "   - Security group allows SSH (port 22) from your IP"
-        echo ""
-        echo "   Systems Manager not available - try:"
-        echo "   aws ssm start-session --target $INSTANCE_ID --region $REGION --profile hcmining-prod"
-        exit 1
-    fi
-fi
-
-# Deploy to server
-echo ""
-echo "📦 Deploying to server..."
-
-# Create deployment script to run on server
-DEPLOYMENT_SCRIPT=$(cat <<'DEPLOY_EOF'
-#!/bin/bash
-set -e
-
-REGION="${1:-us-east-2}"
-ACCOUNT_ID="${2:-553165044639}"
-IMAGE_TAG="${3}"
-APP_DIR="${4:-/opt/borehole}"
-
-cd "$APP_DIR" || { echo "❌ App directory not found: $APP_DIR"; exit 1; }
-
-echo "📥 Logging in to ECR..."
-DOCKER_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
-DOCKER_CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}"
-mkdir -p "$DOCKER_CONFIG_DIR"
-PASSWORD=$(aws ecr get-login-password --region "$REGION")
-if [ -z "$PASSWORD" ]; then
-    echo "❌ Failed to retrieve ECR login password"
-    exit 1
-fi
-AUTH=$(printf "AWS:%s" "$PASSWORD" | base64 | tr -d '\n')
-cat > "$DOCKER_CONFIG_DIR/config.json" <<'EOF'
-{
-  "auths": {
-    "__REGISTRY__": {
-      "auth": "__AUTH__"
-    },
-    "https://__REGISTRY__": {
-      "auth": "__AUTH__"
-    }
-  },
-  "credsStore": ""
-}
+Environment variables:
+  DEPLOY_SERVER_HOST   Override default host (${SERVER_HOST})
+  DEPLOY_SSH_USER      Override default ssh user (${SSH_USER})
+  REMOTE_APP_DIR       Remote application directory (${APP_DIR})
+  ENV_FILE             Local env file to upload (${ENV_FILE_PATH})
+  RSYNC_OPTS           Extra rsync flags (optional)
 EOF
-sed -i "s|__REGISTRY__|$DOCKER_REGISTRY|g" "$DOCKER_CONFIG_DIR/config.json"
-sed -i "s|__AUTH__|$AUTH|g" "$DOCKER_CONFIG_DIR/config.json"
-chmod 600 "$DOCKER_CONFIG_DIR/config.json"
-docker --config "$DOCKER_CONFIG_DIR" login --username AWS --password-stdin "$DOCKER_REGISTRY" <<<"$PASSWORD" >/dev/null 2>&1 || true
-export DOCKER_CONFIG="$DOCKER_CONFIG_DIR"
-
-echo "📥 Pulling latest images..."
-docker --config "$DOCKER_CONFIG_DIR" pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-frontend:${IMAGE_TAG}
-docker --config "$DOCKER_CONFIG_DIR" pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-backend:${IMAGE_TAG}
-docker --config "$DOCKER_CONFIG_DIR" pull ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/borehole-pipeline:${IMAGE_TAG}
-
-echo "📝 Updating environment variables..."
-export ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
-export IMAGE_TAG="${IMAGE_TAG}"
-
-# Fetch secrets if fetch-secrets.sh exists
-if [ -f scripts/fetch-secrets.sh ]; then
-    echo "🔐 Fetching secrets from AWS Secrets Manager..."
-    bash scripts/fetch-secrets.sh
-    export $(grep -v '^#' .env.prod | xargs)
+  exit 1
 fi
 
-echo "🚀 Starting services..."
-docker-compose -f docker-compose.prod.yml pull
-docker-compose -f docker-compose.prod.yml up -d
-
-echo "⏳ Waiting for services to start..."
-sleep 10
-
-echo "📊 Service status:"
-docker-compose -f docker-compose.prod.yml ps
-
+echo "🚀 Deploying Borehole Analysis App"
+echo "   Host: ${SSH_USER}@${SERVER_HOST}"
+echo "   Target directory: ${APP_DIR}"
 echo ""
-echo "✅ Deployment complete!"
-DEPLOY_EOF
+
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "❌ rsync not installed. Please install rsync first." >&2
+  exit 1
+fi
+
+if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${SSH_USER}@${SERVER_HOST}" "echo ok" >/dev/null 2>&1; then
+  cat <<EOF
+❌ Unable to connect to ${SSH_USER}@${SERVER_HOST}
+- verify network access and SSH key
+- or set DEPLOY_SERVER_HOST/DEPLOY_SSH_USER if different
+EOF
+  exit 1
+fi
+
+echo "📁 Ensuring remote directory structure exists..."
+ssh "${SSH_USER}@${SERVER_HOST}" "sudo mkdir -p ${APP_DIR} && sudo chown -R ${SSH_USER}:${SSH_USER} ${APP_DIR}"
+ssh "${SSH_USER}@${SERVER_HOST}" "mkdir -p ${APP_DIR}/logs ${APP_DIR}/output ${APP_DIR}/secrets"
+
+RSYNC_EXCLUDES=(
+  '--exclude=.git/'
+  '--exclude=venv/'
+  '--exclude=node_modules/'
+  '--exclude=__pycache__/'
+  '--exclude=logs/'
+  '--exclude=output/'
+  '--exclude=*.pyc'
 )
 
-# Copy files to server
-echo "📤 Copying files to server..."
-ssh "$SSH_USER@$SERVER_HOST" "mkdir -p /opt/borehole/{config,database,scripts,deploy}" || true
+echo "📦 Syncing project files..."
+DEST="${SSH_USER}@${SERVER_HOST}:${APP_DIR}/"
+# shellcheck disable=SC2086 # optional RSYNC_OPTS is intentionally unquoted
+rsync -az --delete "${RSYNC_EXCLUDES[@]}" ${RSYNC_OPTS:-} ./ "$DEST"
 
-# Copy necessary files
-scp docker-compose.prod.yml "$SSH_USER@$SERVER_HOST:/opt/borehole/" > /dev/null
-scp database/init.sql "$SSH_USER@$SERVER_HOST:/opt/borehole/database/" > /dev/null
-scp deploy/nginx.conf "$SSH_USER@$SERVER_HOST:/opt/borehole/deploy/" > /dev/null
-scp scripts/fetch-secrets.sh "$SSH_USER@$SERVER_HOST:/opt/borehole/scripts/" > /dev/null
-scp -r config/ "$SSH_USER@$SERVER_HOST:/opt/borehole/" > /dev/null 2>&1 || echo "⚠️  config/ not copied (may need manual setup)"
+if [[ -f "${ENV_FILE_PATH}" ]]; then
+  echo "🔐 Uploading ${ENV_FILE_PATH} -> ${APP_DIR}/.env.prod"
+  scp "${ENV_FILE_PATH}" "${SSH_USER}@${SERVER_HOST}:${APP_DIR}/.env.prod"
+else
+  echo "⚠️  ${ENV_FILE_PATH} not found locally. Expecting it to exist on the server."
+fi
 
-# Ensure fetch-secrets.sh is executable
-ssh "$SSH_USER@$SERVER_HOST" "chmod +x /opt/borehole/scripts/fetch-secrets.sh" 2>/dev/null || true
+if [[ -f secrets/box_config.json ]]; then
+  echo "📄 Uploading secrets/box_config.json"
+  scp secrets/box_config.json "${SSH_USER}@${SERVER_HOST}:${APP_DIR}/secrets/box_config.json"
+fi
 
-# Copy and run deployment script
-echo "$DEPLOYMENT_SCRIPT" | ssh "$SSH_USER@$SERVER_HOST" "cat > /tmp/deploy.sh && chmod +x /tmp/deploy.sh && bash /tmp/deploy.sh $REGION $ACCOUNT_ID $IMAGE_TAG /opt/borehole"
+echo "🚢 Rolling out containers..."
+ssh "${SSH_USER}@${SERVER_HOST}" "bash -s ${APP_DIR}" <<'REMOTE_EOF'
+set -euo pipefail
+
+APP_DIR="$1"
+
+cd "$APP_DIR"
+
+if [[ ! -f .env.prod ]]; then
+  echo "❌ Missing .env.prod in $APP_DIR" >&2
+  exit 1
+fi
+
+ln -sf .env.prod .env
+
+if [[ ! -f secrets/box_config.json ]]; then
+  echo "⚠️  secrets/box_config.json not found. Pipeline Box access may fail." >&2
+fi
+
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE_CMD="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE_CMD="docker-compose"
+else
+  echo "❌ Docker Compose is not installed. Run scripts/setup-server.sh on the host." >&2
+  exit 1
+fi
+
+echo "🛠  Building + starting containers..."
+$COMPOSE_CMD -f docker-compose.prod.yml up -d --build
+
+echo "📊 Current service status:"
+$COMPOSE_CMD -f docker-compose.prod.yml ps
 
 echo ""
-echo "================================================="
-echo "✅ Deployment complete!"
+echo "✅ Deployment complete"
+REMOTE_EOF
+
 echo ""
-echo "Application should be running at:"
-echo "  http://$SERVER_HOST"
-echo ""
-echo "To check status:"
-echo "  ssh $SSH_USER@$SERVER_HOST 'cd /opt/borehole && docker-compose -f docker-compose.prod.yml ps'"
-echo ""
-echo "To view logs:"
-echo "  ssh $SSH_USER@$SERVER_HOST 'cd /opt/borehole && docker-compose -f docker-compose.prod.yml logs -f'"
+echo "🌐 Application should be available at: http://${SERVER_HOST}/"
+echo "💡 Tip: ensure the server has pull access to Box and secrets configured."
+

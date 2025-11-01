@@ -49,6 +49,12 @@ def require_auth(f):
                 return jsonify({"error": "Invalid authorization header"}), 401
 
         if not token:
+            query_token = request.args.get("token", "").strip()
+            if query_token.lower().startswith("bearer "):
+                query_token = query_token.split(" ", 1)[1]
+            token = query_token or None
+
+        if not token:
             return jsonify({"error": "Missing authorization token"}), 401
 
         # Verify token

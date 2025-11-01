@@ -37,7 +37,7 @@ class BoxClient:
 
         if app_auth.get("privateKey"):
             # JWT authentication with As-User impersonation
-            logger.info("Using JWT authentication")
+            logger.debug("Using JWT authentication")
             auth = JWTAuth.from_settings_file(config_path)
             auth.authenticate_instance()
             admin_client = Client(auth)
@@ -45,7 +45,7 @@ class BoxClient:
             # Use As-User if specified
             as_user_id = os.environ.get("BOX_AS_USER_ID")
             if as_user_id:
-                logger.info(f"Impersonating user: {as_user_id}")
+                logger.debug("Impersonating a Box user via As-User")
                 from boxsdk.object.user import User
 
                 user = User(admin_client.session, as_user_id)
@@ -54,7 +54,7 @@ class BoxClient:
                 self.client = admin_client
         else:
             # CCG authentication (OAuth 2.0 Client Credentials Grant)
-            logger.info("Using CCG authentication")
+            logger.debug("Using CCG authentication")
             client_id = box_settings.get("clientID")
             client_secret = box_settings.get("clientSecret")
 
@@ -63,7 +63,7 @@ class BoxClient:
 
             as_user_id = os.environ.get("BOX_AS_USER_ID")
             if as_user_id:
-                logger.info(f"Using CCG As-User impersonation for user_id={as_user_id}")
+                logger.debug("Using CCG As-User impersonation")
                 try:
                     auth = CCGAuth(
                         client_id=client_id,
@@ -101,10 +101,7 @@ class BoxClient:
                         # Try to fall back to enterprise token if available
                         enterprise_id = config.get("enterpriseID")
                         if enterprise_id:
-                            logger.warning(
-                                f"Falling back to enterprise token "
-                                f"(enterprise_id={enterprise_id})"
-                            )
+                            logger.warning("Falling back to enterprise token")
                             auth = CCGAuth(
                                 client_id=client_id,
                                 client_secret=client_secret,
@@ -124,7 +121,7 @@ class BoxClient:
                         raise
             else:
                 # Enterprise token (fallback if no As-User specified)
-                logger.info("Using CCG enterprise token")
+                logger.debug("Using CCG enterprise token")
                 enterprise_id = config.get("enterpriseID")
                 if not enterprise_id:
                     raise ValueError("CCG enterprise token requires enterpriseID")
@@ -142,59 +139,48 @@ class BoxClient:
         me_id = None
         try:
             me = self.client.user().get()
-            user_name = getattr(me, "name", "N/A")
             me_id = str(me.id) if hasattr(me, "id") else None
-            logger.info(
-                f"Authenticated as user: {me.login} "
-                f"(ID: {me.id}, Name: {user_name})"
-            )
+            logger.debug("Authenticated to Box")
         except Exception as e:
             logger.warning(f"Could not verify user identity: {e}")
 
         # Check folder permissions for debugging
         try:
             # Try to check a known folder's collaborations
-            test_folder_id = os.environ.get("BOX_TEST_FOLDER_ID", "348307991463")
-            folder = self.client.folder(test_folder_id).get()
-            collabs = list(folder.get_collaborations())
-            logger.info(
-                f"Folder '{folder.name}' ({test_folder_id}) has "
-                f"{len(collabs)} collaborator(s)"
-            )
+            test_folder_id = os.environ.get("BOX_TEST_FOLDER_ID")
+            if test_folder_id:
+                folder = self.client.folder(test_folder_id).get()
+                collabs = list(folder.get_collaborations())
+                logger.debug("Checked folder collaborations for access validation")
             if me_id:
-                logger.info(
-                    f"Looking for service account ID: {me_id} (type: {type(me_id)})"
-                )
+                logger.debug("Validating service account access")
             service_account_found = False
             for collab in collabs:
                 role = getattr(collab, "role", "N/A")
                 collab_type = getattr(collab.accessible_by, "type", "N/A")
                 if collab_type == "user":
-                    login = getattr(collab.accessible_by, "login", "N/A")
-                    collab_id = collab.accessible_by.id
-                    logger.info(f"  - {login}: {role} " f"(ID: {collab_id})")
+                    collab_id = getattr(collab.accessible_by, "id", None)
                     if me_id:  # Only log comparison when we have me_id
-                        logger.info(
-                            f"Comparing: me_id='{me_id}' vs "
-                            f"collab_id='{collab_id}' "
-                            f"(match: {str(collab_id) == me_id})"
-                        )
-                    if me_id and str(collab_id) == me_id:
+                        if collab_id and str(collab_id) == me_id:
+                            service_account_found = True
+                            logger.info(
+                                "Service account ID %s has %s access",
+                                me_id,
+                                role,
+                            )
+                    if me_id and collab_id and str(collab_id) == me_id:
                         service_account_found = True
-                        msg = (
-                            f"    ✓ Service account found as {role} - "
-                            "but downloads may still fail if:\n"
-                            "      1. Box app missing 'Read and write' "
-                            "OAuth scope\n"
-                            "      2. Box Shield policy blocking API "
-                            "downloads\n"
-                            "      3. Enterprise API download restrictions"
-                        )
-                        logger.info(msg)
+            if me_id and service_account_found:
+                logger.debug("Service account permissions confirmed")
+            if me_id and not service_account_found:
+                logger.warning(
+                    "Service account ID %s not found among collaborators",
+                    me_id,
+                )
         except Exception as e:
             logger.warning(f"Could not check folder collaborations: {e}")
 
-        logger.info("Box client authenticated successfully")
+        logger.debug("Box client authenticated successfully")
 
     def probe_download_rights(self, file_id: str) -> Dict:
         """Return key permission flags used to diagnose 403s on downloads."""
@@ -215,7 +201,7 @@ class BoxClient:
                 "permissions": getattr(f, "permissions", None),
                 "classification": getattr(f, "classification", None),
             }
-            logger.info(f"Probe for file {file_id}: {info}")
+            logger.debug("Downloaded permissions probe for file")
             return info
         except BoxAPIException as e:
             logger.error(f"Probe failed for file {file_id}: {e}")
@@ -303,37 +289,43 @@ class BoxClient:
             logger.error(f"Download blocked: {e}")
             raise
 
-    def ensure_shared_link(self, file_id: str, access: str = "collaborators") -> str:
-        """Ensure a shared link exists for a file, create if missing.
+    def get_file_link(self, file_id: str, access: str = "collaborators") -> str:
+        """Return an existing link for a file without modifying Box state.
 
         Args:
             file_id: Box file ID
-            access: Access level (collaborators, open, company)
+            access: Retained for backwards compatibility; unused.
 
         Returns:
-            Shared link URL
+            URL that can be used to open the file in Box.
         """
         try:
             file_item = self.client.file(file_id)
 
-            # Check if shared link already exists
+            # Attempt to fetch an existing shared link without creating one.
             try:
-                shared_link = file_item.get_shared_link()
-                if shared_link:
-                    logger.debug(f"Shared link exists for file {file_id}")
+                file_info = file_item.get(fields=["shared_link"])
+                shared_link = getattr(file_info, "shared_link", None)
+                if shared_link and shared_link.get("url"):
+                    logger.debug(f"Using existing shared link for file {file_id}")
                     return shared_link["url"]
-            except BoxAPIException:
-                # No shared link exists, create one
-                pass
+            except BoxAPIException as link_error:
+                logger.debug(
+                    "Could not retrieve shared link for file %s: %s",
+                    file_id,
+                    link_error,
+                )
 
-            # Create new shared link
-            shared_link = file_item.create_shared_link(access=access, can_download=True)
-            logger.info(f"Created shared link for file {file_id}")
-
-            return shared_link["url"]
+            # Fall back to standard Box preview URL (requires user permissions).
+            fallback_url = f"https://app.box.com/file/{file_id}"
+            logger.info(
+                "No shared link available for file %s; falling back to preview URL",
+                file_id,
+            )
+            return fallback_url
 
         except BoxAPIException as e:
-            logger.error(f"Error creating shared link for {file_id}: {e}")
+            logger.error(f"Error retrieving link for {file_id}: {e}")
             raise
 
     def get_file_metadata(self, file_id: str) -> Dict:
@@ -369,7 +361,7 @@ class BoxClient:
         results = []
         try:
             folder = self.client.folder(folder_id).get()
-            logger.info(f"Walking folder tree from {folder.name} ({folder_id})")
+            logger.debug("Walking folder tree from root folder")
 
             # Get all items in the mine area folder
             for item in folder.get_items():
@@ -393,9 +385,7 @@ class BoxClient:
 
                     if hole_files:
                         results.append((hole_name, hole_files))
-                        logger.info(
-                            f"Found {len(hole_files)} files in hole folder {hole_name}"
-                        )
+                        logger.debug("Found %d files in a hole folder", len(hole_files))
 
         except BoxAPIException as e:
             logger.error(f"Error walking folder tree: {e}")

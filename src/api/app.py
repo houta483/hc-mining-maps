@@ -7,6 +7,13 @@ from flask_cors import CORS
 
 from src.api.auth import auth_bp
 from src.api.data import data_bp
+try:
+    from src.api.overlay import overlay_bp
+except Exception as exc:  # pragma: no cover - fail open if overlay storage is RO
+    overlay_bp = None
+    logging.getLogger(__name__).warning(
+        "Overlay module disabled: %s", exc
+    )
 from src.api.database import db
 
 logger = logging.getLogger(__name__)
@@ -22,6 +29,8 @@ def create_app():
     # Register blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(data_bp)
+    if overlay_bp is not None:
+        app.register_blueprint(overlay_bp)
 
     # Initialize database connection on startup
     try:

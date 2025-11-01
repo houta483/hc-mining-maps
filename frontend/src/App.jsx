@@ -8,17 +8,6 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    // Check if user has valid token
-    const token = localStorage.getItem('token')
-    if (token) {
-      // Verify token is still valid
-      verifyToken(token)
-    } else {
-      setLoading(false)
-    }
-  }, [])
-
   const verifyToken = async (token) => {
     try {
       const response = await fetch('/api/auth/verify', {
@@ -38,6 +27,17 @@ function App() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    // Check if user has valid token
+    const token = localStorage.getItem('token')
+    if (token) {
+      // Verify token is still valid
+      verifyToken(token)
+    } else {
+      setLoading(false)
+    }
+  }, [])
 
   const handleLogin = () => {
     setIsAuthenticated(true)

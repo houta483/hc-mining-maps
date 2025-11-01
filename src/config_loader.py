@@ -1,6 +1,8 @@
 """Configuration loader for the pipeline."""
 
+import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -26,6 +28,48 @@ class Config:
             self.data = yaml.safe_load(f)
 
         logger.info(f"Loaded configuration from {config_path}")
+        self._apply_environment_overrides()
+
+    def _apply_environment_overrides(self) -> None:
+        """Override YAML configuration with environment variables."""
+
+        overrides = [
+            ("BOX_PARENT_FOLDER_ID", "parent_folder_id", str),
+            ("PIPELINE_REFRESH_SECONDS", "refresh_seconds", int),
+            ("BOX_SHARED_LINK_ACCESS", "box_shared_link_access", str),
+            ("PIPELINE_LOG_LEVEL", "log_level", str),
+            ("PIPELINE_LOG_PATH", "log_path", str),
+            ("PIPELINE_AUDIT_RETENTION_DAYS", "audit_retention_days", int),
+        ]
+
+        for env_var, key, caster in overrides:
+            value = os.environ.get(env_var)
+            if not value:
+                continue
+            try:
+                self.data[key] = caster(value)
+                logger.debug("Override '%s' from %s", key, env_var)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid value for %s (config key %s)",
+                    env_var,
+                    key,
+                )
+
+        mine_areas_json = os.environ.get("BOX_MINE_AREAS_JSON")
+        if mine_areas_json:
+            try:
+                mine_areas = json.loads(mine_areas_json)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Invalid BOX_MINE_AREAS_JSON; keeping existing list"
+                )
+            else:
+                if isinstance(mine_areas, list):
+                    self.data["mine_areas"] = mine_areas
+                    logger.debug(
+                        "Override mine_areas from environment"
+                    )
 
     def get_mine_areas(self) -> List[Dict]:
         """Get list of mine areas to process.
@@ -67,7 +111,10 @@ class Config:
 
     def get_kmz_filename_template(self) -> str:
         """Get KMZ filename template."""
-        return self.data.get("kmz_filename_template", "hc_mining_{mine_area}_fm.kmz")
+        return self.data.get(
+            "kmz_filename_template",
+            "hc_mining_{mine_area}_fm.kmz",
+        )
 
     def get_public_url_template(self) -> str:
         """Get public URL template."""
@@ -91,7 +138,7 @@ class Config:
 
     def get_log_level(self) -> str:
         """Get logging level."""
-        return self.data.get("log_level", "INFO")
+        return self.data.get("log_level", "WARNING")
 
     def get_log_path(self) -> str:
         """Get log file path."""

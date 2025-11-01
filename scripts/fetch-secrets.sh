@@ -7,6 +7,7 @@ set -e
 REGION="${AWS_REGION:-us-east-2}"
 SECRETS_DIR="${SECRETS_DIR:-$(pwd)}"
 ENV_FILE="${ENV_FILE:-.env.prod}"
+RUNTIME_SECRET_ID="${RUNTIME_SECRET_ID:-prod/borehole/runtime}"
 
 echo "🔐 Fetching secrets from AWS Secrets Manager..."
 
@@ -59,6 +60,55 @@ echo "$BOX_CONFIG" > "$SECRETS_DIR/secrets/box_config.json"
 chmod 600 "$SECRETS_DIR/secrets/box_config.json"
 echo "✅ Box config written to $SECRETS_DIR/secrets/box_config.json"
 
+# Fetch runtime configuration (optional)
+BOX_PARENT_FOLDER_ID=""
+BOX_MINE_AREAS_JSON=""
+PIPELINE_REFRESH_SECONDS="600"
+
+echo "📥 Fetching runtime pipeline settings (optional)..."
+if RUNTIME_SECRET=$(aws secretsmanager get-secret-value \
+  --secret-id "$RUNTIME_SECRET_ID" \
+  --region "$REGION" \
+  --query SecretString \
+  --output text 2>/dev/null); then
+  BOX_PARENT_FOLDER_ID=$(RUNTIME_SECRET="$RUNTIME_SECRET" python3 - <<'PY'
+import json
+import os
+secret = json.loads(os.environ["RUNTIME_SECRET"])
+parent = secret.get("parent_folder_id", "")
+print(parent, end="")
+PY
+  )
+  BOX_MINE_AREAS_JSON=$(RUNTIME_SECRET="$RUNTIME_SECRET" python3 - <<'PY'
+import json
+import os
+secret = json.loads(os.environ["RUNTIME_SECRET"])
+mine_areas = secret.get("mine_areas")
+if mine_areas:
+    print(json.dumps(mine_areas, separators=(",", ":")), end="")
+else:
+    print("", end="")
+PY
+  )
+  PIPELINE_REFRESH_SECONDS_RAW=$(RUNTIME_SECRET="$RUNTIME_SECRET" python3 - <<'PY'
+import json
+import os
+secret = json.loads(os.environ["RUNTIME_SECRET"])
+value = secret.get("refresh_seconds")
+if value is None:
+    print("", end="")
+else:
+    print(str(value), end="")
+PY
+  )
+  if [ -n "$PIPELINE_REFRESH_SECONDS_RAW" ]; then
+    PIPELINE_REFRESH_SECONDS="$PIPELINE_REFRESH_SECONDS_RAW"
+  fi
+  echo "✅ Runtime settings loaded from $RUNTIME_SECRET_ID"
+else
+  echo "ℹ️  Runtime secret $RUNTIME_SECRET_ID not found; using defaults"
+fi
+
 # Write .env.prod file
 cat > "$ENV_FILE" <<EOF
 # Database Configuration
@@ -78,11 +128,24 @@ AWS_REGION=${REGION}
 
 # Application Configuration
 CORS_ORIGINS=*
-USE_LOCAL_DATA=false
 DEBUG_MODE=false
+BOX_PARENT_FOLDER_ID=${BOX_PARENT_FOLDER_ID}
+BOX_MINE_AREAS_JSON=${BOX_MINE_AREAS_JSON}
+PIPELINE_REFRESH_SECONDS=${PIPELINE_REFRESH_SECONDS}
 EOF
 
 echo "✅ Secrets written to $ENV_FILE"
 echo ""
 echo "⚠️  Note: $ENV_FILE contains sensitive data. Do not commit to git!"
+
+export MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
+export MYSQL_DATABASE=${DB_NAME}
+export MYSQL_USER=${DB_USER}
+export MYSQL_PASSWORD=${DB_PASSWORD}
+export JWT_SECRET_KEY=${JWT_SECRET_KEY}
+export MAPBOX_TOKEN=${MAPBOX_TOKEN}
+export AWS_REGION=${REGION}
+export BOX_PARENT_FOLDER_ID=${BOX_PARENT_FOLDER_ID}
+export BOX_MINE_AREAS_JSON=${BOX_MINE_AREAS_JSON}
+export PIPELINE_REFRESH_SECONDS=${PIPELINE_REFRESH_SECONDS}
 
