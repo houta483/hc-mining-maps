@@ -52,6 +52,7 @@ RSYNC_EXCLUDES=(
   '--exclude=__pycache__/'
   '--exclude=logs/'
   '--exclude=output/'
+  '--exclude=src/data/'
   '--exclude=*.pyc'
 )
 

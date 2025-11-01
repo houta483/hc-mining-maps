@@ -216,6 +216,7 @@ def upload_overlay():
         for pixel, coords in zip(image_corners, map_corners):
             translate_command.extend(
                 [
+                    "-gcp",
                     str(pixel[0]),
                     str(pixel[1]),
                     str(coords[0]),

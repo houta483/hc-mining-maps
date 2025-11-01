@@ -32,6 +32,13 @@ class Publisher:
         self.cloudfront_distribution_id = cloudfront_distribution_id
         self.aws_region = aws_region
 
+        self.s3_client = None
+        self.cloudfront_client = None
+
+        if not s3_bucket:
+            logger.info("Publisher disabled: no S3 bucket configured")
+            return
+
         # Initialize AWS clients
         try:
             if credentials_file:
@@ -43,8 +50,6 @@ class Publisher:
                     self.cloudfront_client = session.client(
                         "cloudfront", region_name=aws_region
                     )
-                else:
-                    self.cloudfront_client = None
             else:
                 # Use default credentials (IAM role, env vars, etc.)
                 self.s3_client = boto3.client("s3", region_name=aws_region)
@@ -52,8 +57,6 @@ class Publisher:
                     self.cloudfront_client = boto3.client(
                         "cloudfront", region_name=aws_region
                     )
-                else:
-                    self.cloudfront_client = None
 
             logger.info(
                 f"Publisher initialized: bucket={s3_bucket}, region={aws_region}"
@@ -82,6 +85,10 @@ class Publisher:
             local_file = Path(local_path)
             if not local_file.exists():
                 raise FileNotFoundError(f"File not found: {local_path}")
+
+            if not self.s3_client or not self.s3_bucket:
+                logger.info("S3 upload skipped: publisher disabled")
+                return str(local_file)
 
             # Determine content type
             content_type = "application/vnd.google-earth.kmz"
@@ -155,6 +162,10 @@ class Publisher:
             local_file = Path(local_path)
             if not local_file.exists():
                 raise FileNotFoundError(f"File not found: {local_path}")
+
+            if not self.s3_client or not self.s3_bucket:
+                logger.info("Audit upload skipped: publisher disabled")
+                return str(local_file)
 
             self.s3_client.upload_file(
                 str(local_file),

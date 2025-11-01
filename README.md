@@ -271,6 +271,32 @@ A single Ubuntu EC2 instance runs the full Docker Compose stack (MySQL, backend,
    docker compose -f docker-compose.prod.yml logs -f pipeline
    ```
 
+### Automated Deployments (GitHub Actions)
+
+Production deploys can run straight from GitHub once the `Deploy Production` workflow has the required secrets. The job is tied to the `production` environment so you can require manual approval and audit who promoted a build.
+
+1. In repository settings, add these **Actions secrets**:
+   | Secret | Purpose |
+   |--------|---------|
+   | `PROD_SSH_HOST` | Public DNS/IP of the prod server (`18.216.19.153`) |
+   | `PROD_SSH_USER` | SSH username (`ubuntu`) |
+   | `PROD_SSH_KEY` | Private SSH key with access to the server (PEM contents) |
+   | `PROD_ENV_FILE` | Contents of `.env.prod` (single secret, including newlines) |
+   | `PROD_BOX_CONFIG_JSON` | JSON payload for `secrets/box_config.json` (optional but recommended) |
+   | `PROD_REMOTE_APP_DIR` | Override remote app path (defaults to `/opt/borehole` if omitted) |
+
+2. Protect the `production` environment (Settings → Environments) with reviewers if you want approval before each deploy.
+
+3. Push to `master` (or trigger manually via **Actions → Deploy Production → Run workflow**) and approve the environment when prompted.
+
+Behind the scenes the workflow:
+   - checks out the repo
+   - writes `.env.prod` and `secrets/box_config.json` from the secrets (never committed)
+   - opens an SSH tunnel using `PROD_SSH_KEY`
+   - runs `./scripts/manage.sh prod`, which rsyncs files and restarts the compose stack  
+
+All sensitive material stays in GitHub’s secrets store and the server—nothing lands in git history.
+
 ### Server Access
 
 - **SSH** (primary)
@@ -336,6 +362,8 @@ A single Ubuntu EC2 instance runs the full Docker Compose stack (MySQL, backend,
 | Deploy script errors: `Missing .env.prod` | `.env.prod` not present locally or on server | Create/populate `.env.prod`, re-run deploy |
 | Local login fails | User not created or wrong password | `docker compose exec backend python3 /app/scripts/create_admin_user.py admin <pw>` |
 | Box fetch fails with 403 | Service account not added to Box folder | Invite the Box app user as a collaborator and re-run pipeline |
+| `Invalid folder ID 'YOUR_BOX_FOLDER_ID_HERE'` | `.env.prod` missing `BOX_PARENT_FOLDER_ID` or has placeholder | Update `.env.prod` with real numeric Box folder ID from Box URL, redeploy |
+| No login required / bypassing authentication | Browser has cached JWT token in localStorage | Clear browser localStorage or use incognito window; check JWT_SECRET_KEY is set in `.env.prod` |
 
 ## Support
 

@@ -20,7 +20,8 @@ parent_folder_id: "YOUR_BOX_FOLDER_ID_HERE"
 #     box_folder_id: "FOLDER_ID_HERE"
 
 # AWS Configuration
-s3_bucket: "hc-mining-maps"
+s3_bucket: ""
+publish_enabled: false
 cloudfront_distribution_id: "DIST_ID_HERE"
 aws_region: "us-east-1"
 

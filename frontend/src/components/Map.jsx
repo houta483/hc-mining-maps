@@ -2035,7 +2035,7 @@ const alignmentRotationDegrees = useMemo(() => {
               type="button"
               className="overlay-upload-primary"
               onClick={() => handleAlignmentCompleteRef.current && handleAlignmentCompleteRef.current()}
-              disabled={!overlayAlignment?.mapCorners || alignmentSaving}
+              disabled={alignmentSaving}
             >
               {alignmentMode === 'existingOverlay'
                 ? alignmentSaving
